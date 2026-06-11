@@ -14,9 +14,10 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { createDoom } from '../lib/doom-engine.mjs';
-import { renderHalfBlocks } from '../lib/render.mjs';
+import { renderHalfBlocks, renderQuadrants } from '../lib/render.mjs';
 import { readConfig, TMP_ROOT } from '../lib/state.mjs';
 import { computeGameWidth, buildScaledBuffer, bufferGetPixel } from '../lib/scale.mjs';
+import { sharpen, toneLift } from '../lib/postfx.mjs';
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -272,16 +273,30 @@ function writeFrame(engine) {
     const pxRows = vp.pxRows % 2 === 0 ? vp.pxRows : vp.pxRows + 1; // must be even
 
     const aspect  = cfg.aspect ?? '4:3';
+    const style   = cfg.style  ?? 'quad';
     const gameW   = computeGameWidth(aspect, pxRows, cols);
     const leftPad = Math.floor((cols - gameW) / 2);
     const pad     = leftPad > 0 ? ' '.repeat(leftPad) : '';
 
-    // Build the scaled RGB buffer using box-filter averaging
-    const scaledBuf     = buildScaledBuffer(engine.getPixel, engine.width, engine.height, gameW, pxRows);
-    const scaledGetPixel = bufferGetPixel(scaledBuf, gameW);
-
-    // Render game content as half-block lines
-    const gameLines = renderHalfBlocks(scaledGetPixel, gameW, pxRows, { truecolor: vp.truecolor });
+    let gameLines;
+    if (style === 'quad') {
+      // Quad path: sample at double horizontal resolution so each cell covers 2×2 px
+      const dstW = gameW * 2;
+      const dstH = pxRows;
+      const scaledBuf = buildScaledBuffer(engine.getPixel, engine.width, engine.height, dstW, dstH);
+      sharpen(scaledBuf, dstW, dstH);
+      toneLift(scaledBuf);
+      const scaledGetPixel = bufferGetPixel(scaledBuf, dstW);
+      // renderQuadrants expects pxW = dstW (cells = dstW/2 = gameW), pxH = dstH
+      gameLines = renderQuadrants(scaledGetPixel, dstW, dstH, { truecolor: vp.truecolor });
+    } else {
+      // Half-block path: classic gameW × pxRows sampling, with post-fx for free
+      const scaledBuf = buildScaledBuffer(engine.getPixel, engine.width, engine.height, gameW, pxRows);
+      sharpen(scaledBuf, gameW, pxRows);
+      toneLift(scaledBuf);
+      const scaledGetPixel = bufferGetPixel(scaledBuf, gameW);
+      gameLines = renderHalfBlocks(scaledGetPixel, gameW, pxRows, { truecolor: vp.truecolor });
+    }
 
     // Prepend pillarbox padding (plain spaces, no color codes — gutters inherit terminal bg)
     const RESET = '\x1b[0m';

@@ -14,6 +14,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { runDoomTests } from './doom.test.mjs';
 import { runPlayTests } from './play.test.mjs';
+import { runRenderTests } from './render.test.mjs';
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -208,8 +209,8 @@ test('statusline valid payload → correct output structure', () => {
     `Expected ${expectedRows} lines, got ${lines.length}. stdout: ${JSON.stringify(r.stdout.slice(0, 200))}`,
   );
 
-  // Must contain half-block glyph
-  assert(r.stdout.includes('▀'), 'Output should contain half-block ▀');
+  // Must contain a block-element glyph (▀–▟ range covers half-block and all quadrant glyphs)
+  assert(/[▀-▟]/.test(r.stdout), 'Output should contain a block-element glyph (▀–▟)');
   // Must contain an ANSI escape sequence
   assert(r.stdout.includes('\x1b['), 'Output should contain ANSI escape sequences');
 
@@ -344,6 +345,13 @@ const playCounters = { passed: { value: passed }, failed: { value: failed } };
 await runPlayTests(playCounters, { test });
 passed = playCounters.passed.value;
 failed = playCounters.failed.value;
+
+// ── Phase D: render / postfx unit tests ───────────────────────────────────────
+
+const renderCounters = { passed: { value: passed }, failed: { value: failed } };
+await runRenderTests(renderCounters, { test });
+passed = renderCounters.passed.value;
+failed = renderCounters.failed.value;
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 

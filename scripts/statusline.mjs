@@ -15,7 +15,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { readConfig, resolveSessionState, TMP_ROOT } from '../lib/state.mjs';
 import { createFire, stepFire, heatToRgb, saveFire, loadFire } from '../lib/fire.mjs';
-import { renderHalfBlocks } from '../lib/render.mjs';
+import { renderHalfBlocks, renderQuadrants } from '../lib/render.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -238,9 +238,13 @@ async function main() {
   const intensity = intensityMap[state.mode] ?? 0.25;
 
   // 6. Fire persistence
+  const style = config.style ?? 'quad';
+  // For quad mode run the fire simulation at double width so each cell has 2 columns
+  const fireW = style === 'quad' ? width * 2 : width;
+
   const fireFileId = sessionId ?? 'global';
   const fireFile = path.join(FIRE_SESSION_DIR, `${fireFileId}.fire`);
-  const fire = loadStepSaveFire(fireFile, width, pixH, intensity);
+  const fire = loadStepSaveFire(fireFile, fireW, pixH, intensity);
 
   // 7. Phase B contract: DOOM daemon frame handling
   let extraSuffix;
@@ -342,17 +346,15 @@ async function main() {
     extraSuffix,
   });
 
-  // 9. Render fire via half-blocks
+  // 9. Render fire — quad or half-block depending on config
   const truecolor = detectTruecolor();
-  const lines = renderHalfBlocks(
-    (x, y) => {
-      const idx = clamp(y, 0, pixH - 1) * width + clamp(x, 0, width - 1);
-      return heatToRgb(fire.heat[idx]);
-    },
-    width,
-    pixH,
-    { truecolor },
-  );
+  const heatGetPixel = (x, y) => {
+    const idx = clamp(y, 0, pixH - 1) * fireW + clamp(x, 0, fireW - 1);
+    return heatToRgb(fire.heat[idx]);
+  };
+  const lines = style === 'quad'
+    ? renderQuadrants(heatGetPixel, fireW, pixH, { truecolor })
+    : renderHalfBlocks(heatGetPixel, width, pixH, { truecolor });
 
   // 10. Output: HUD line first, then fire rows
   const output = [hudLine, ...lines].join('\n');

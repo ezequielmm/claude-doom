@@ -66,8 +66,10 @@ if (!SELF_TEST) {
 // ── Imports ───────────────────────────────────────────────────────────────────
 
 import { createDoom, vendorAssetsExist } from '../lib/doom-engine.mjs';
-import { renderHalfBlocks } from '../lib/render.mjs';
+import { renderHalfBlocks, renderQuadrants } from '../lib/render.mjs';
 import { computeGameWidth, buildScaledBuffer, bufferGetPixel } from '../lib/scale.mjs';
+import { sharpen, toneLift } from '../lib/postfx.mjs';
+import { readConfig } from '../lib/state.mjs';
 import { decodeKeys, HeldKeyTracker } from '../lib/keys.mjs';
 import { detectGraphics, iterm2Image, kittyImage } from '../lib/gfx-protocol.mjs';
 import { encodePngFast } from '../lib/png.mjs';
@@ -295,7 +297,7 @@ async function main() {
     }
   }
 
-  // ── Half-block render path (unchanged from original) ─────────────────────
+  // ── Half-block / quadrant render path ────────────────────────────────────
 
   function renderFrameHalfBlocks(eng) {
     const cols   = termCols;
@@ -303,17 +305,36 @@ async function main() {
     // Reserve last row for help text; pixel rows = (rows-1)*2 (must stay even)
     const pxRows = Math.max(2, (rows - 1)) * 2;
 
-    const gameW  = computeGameWidth('4:3', pxRows, cols);
-    const leftPad = Math.max(0, Math.floor((cols - gameW) / 2));
-    const pad     = leftPad > 0 ? ' '.repeat(leftPad) : '';
-    const RESET   = '\x1b[0m';
+    // Read style from config (re-read each frame so live /afk style changes work)
+    const cfg   = readConfig();
+    const style = cfg.style ?? 'quad';
 
-    // Build scaled buffer
-    const scaledBuf = buildScaledBuffer(eng.getPixel, eng.width, eng.height, gameW, pxRows);
-    const gp        = bufferGetPixel(scaledBuf, gameW);
+    const gameWcells = computeGameWidth('4:3', pxRows, cols);
+    const leftPad    = Math.max(0, Math.floor((cols - gameWcells) / 2));
+    const pad        = leftPad > 0 ? ' '.repeat(leftPad) : '';
+    const RESET      = '\x1b[0m';
 
-    // Render game lines
-    const gameLines = renderHalfBlocks(gp, gameW, pxRows, { truecolor });
+    let gameLines;
+    if (style === 'quad') {
+      // Quad path: sample at 2× horizontal resolution → double detail
+      // On a 271-col terminal gameWcells ≈ 135, dstW ≈ 270 → ~270×(pxRows) samples
+      const dstW = gameWcells * 2;
+      const scaledBuf = buildScaledBuffer(eng.getPixel, eng.width, eng.height, dstW, pxRows);
+      sharpen(scaledBuf, dstW, pxRows);
+      toneLift(scaledBuf);
+      const gp = bufferGetPixel(scaledBuf, dstW);
+      gameLines = renderQuadrants(gp, dstW, pxRows, { truecolor });
+    } else {
+      // Classic half-block path with post-fx
+      const scaledBuf = buildScaledBuffer(eng.getPixel, eng.width, eng.height, gameWcells, pxRows);
+      sharpen(scaledBuf, gameWcells, pxRows);
+      toneLift(scaledBuf);
+      const gp = bufferGetPixel(scaledBuf, gameWcells);
+      gameLines = renderHalfBlocks(gp, gameWcells, pxRows, { truecolor });
+    }
+
+    // Status row indicator
+    const styleLabel = style === 'quad' ? 'quad' : 'half';
 
     // Build full frame string: cursor home + all game rows + help row
     let frame = '\x1b[H';
@@ -322,7 +343,8 @@ async function main() {
     }
 
     // Help line — truncated to terminal width
-    const helpTrunc = HELP.slice(0, cols - 1);
+    const helpSuffix = ` [${styleLabel}]`;
+    const helpTrunc = (HELP + helpSuffix).slice(0, cols - 1);
     frame += `${RESET}${helpTrunc}`;
 
     // Synchronized output (BSP § 2026) to reduce tearing

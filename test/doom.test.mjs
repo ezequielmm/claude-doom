@@ -152,14 +152,17 @@ tests.push({
     });
     child.unref();
 
-    // Poll up to 20s for a fresh frame.ans that contains ▀ and ANSI escapes
+    // Poll up to 20s for a fresh frame.ans that contains a block-element glyph and ANSI escapes.
+    // Accept any Unicode Block Elements (U+2580–U+259F) — quad mode produces all 16, half-block
+    // mode produces only ▀.  The regex covers the entire range.
+    const BLOCK_RE = /[▀-▟]/;
     const deadline = Date.now() + 20_000;
     const ok = await waitFor(() => {
       try {
         const stat = fs.statSync(frameFile);
         if (Date.now() - stat.mtimeMs > 5000) return false;
         const content = fs.readFileSync(frameFile, 'utf8');
-        return content.includes('▀') && content.includes('\x1b[');
+        return BLOCK_RE.test(content) && content.includes('\x1b[');
       } catch {
         return false;
       }
@@ -337,14 +340,15 @@ tests.push({
     });
     child.unref();
 
-    // Poll up to 20s for frame.ans
+    // Poll up to 20s for frame.ans — accept any block-element glyph (quad or half-block mode)
+    const BLOCK_RE_STRETCH = /[▀-▟]/;
     const deadline = Date.now() + 20_000;
     const ok = await waitFor(() => {
       try {
         const stat = fs.statSync(frameFile);
         if (Date.now() - stat.mtimeMs > 5000) return false;
         const content = fs.readFileSync(frameFile, 'utf8');
-        return content.includes('▀') && content.includes('\x1b[');
+        return BLOCK_RE_STRETCH.test(content) && content.includes('\x1b[');
       } catch {
         return false;
       }

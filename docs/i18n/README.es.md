@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="../../LICENSE"><img src="https://img.shields.io/badge/licencia-MIT-blue.svg" alt="Licencia MIT" /></a>
-  <img src="https://img.shields.io/badge/versión-0.2.1-informational" alt="versión 0.2.1" />
+  <img src="https://img.shields.io/badge/versión-0.3.0-informational" alt="versión 0.3.0" />
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen" alt="Node >= 20" />
   <img src="https://img.shields.io/badge/dependencias-cero-success" alt="Cero dependencias" />
   <img src="https://img.shields.io/badge/Claude%20Code-%3E%3D2.1.153-blueviolet" alt="Claude Code >= 2.1.153" />
@@ -178,6 +178,23 @@ El flag `--gfx auto` detecta tu terminal y elige el mejor protocolo. Usa `--res 
 
 ---
 
+## Renderer
+
+El renderer `quad` (predeterminado) usa los 16 Block Elements de Unicode (▀▄▌▐▘▝▖▗▚▞▛▜▙▟█ y espacio) para empaquetar un quad de 2×2 píxeles en cada celda del terminal — duplicando el detalle horizontal del renderer clásico `▀` sin requerir nada adicional.
+
+Después del downscaling, dos pases de post-procesamiento se aplican automáticamente:
+- **Nitidez de bordes** (unsharp mask) — aumenta el contraste local, haciendo más nítidos los pasillos oscuros de DOOM y los bordes del fuego.
+- **Tone lift** — expansión de gamma suave + boost de saturación para que la imagen se vea bien en fondos de terminal claros y oscuros.
+
+Cambiá el estilo en cualquier momento:
+
+```sh
+/afk style quad   # bloques adaptativos 2×2 (predeterminado)
+/afk style half   # half-block clásico ▀
+```
+
+---
+
 ## Comandos
 
 | Comando | Descripción |
@@ -188,6 +205,7 @@ El flag `--gfx auto` detecta tu terminal y elige el mejor protocolo. Usa `--res 
 | `/afk game doom` | Frames del daemon DOOM WASM (lanza el daemon automáticamente) |
 | `/afk rows <N>` | Altura del banner, 2–30 filas |
 | `/afk aspect <4:3\|16:10\|stretch>` | Relación de aspecto del frame (predeterminado: `4:3`) |
+| `/afk style <quad\|half>` | Estilo del renderer: `quad` (bloques 2×2, predeterminado) o `half` (clásico `▀`) |
 | `/afk play` | Imprimir el comando para jugar en pantalla completa |
 | `/afk fetch-doom` | Descargar los assets DOOM WASM en `vendor/` |
 | `/afk setup [--yes] [--no-iterm]` | Instalador guiado — conecta statusline, descarga assets, ofrece iTerm2 |
@@ -204,6 +222,7 @@ El flag `--gfx auto` detecta tu terminal y elige el mejor protocolo. Usa `--res 
 | `game` | `"fire"` | Modo de juego activo (`fire` o `doom`) |
 | `rows` | `5` | Altura del banner en filas de terminal |
 | `aspect` | `"4:3"` | Relación de aspecto de los frames DOOM |
+| `style` | `"quad"` | Estilo del renderer: `quad` (bloques 2×2 adaptativos) o `half` (clásico `▀`) |
 
 Edita el archivo directamente o usa los comandos `/afk` — escriben de inmediato.
 

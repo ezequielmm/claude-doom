@@ -32,7 +32,7 @@ function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
 
 function printConfig(cfg) {
   process.stdout.write(
-    `afk-arcade: game=${cfg.game} rows=${cfg.rows} aspect=${cfg.aspect ?? '4:3'} enabled=${cfg.enabled}\n`,
+    `afk-arcade: game=${cfg.game} rows=${cfg.rows} aspect=${cfg.aspect ?? '4:3'} style=${cfg.style ?? 'quad'} enabled=${cfg.enabled}\n`,
   );
 }
 
@@ -157,6 +157,21 @@ switch (cmd) {
     break;
   }
 
+  case 'style': {
+    const style = args[1];
+    if (!['quad', 'half'].includes(style)) {
+      process.stdout.write(
+        `afk-arcade: unknown style "${style ?? ''}". Valid options: quad, half\n` +
+        '  quad — adaptive 2×2 quadrant blocks (2× horizontal detail, default)\n' +
+        '  half — classic half-block ▀ rendering\n',
+      );
+      process.exit(1);
+    }
+    writeConfig({ style });
+    printConfig({ ...cfg, style });
+    break;
+  }
+
   case 'play': {
     // Print the command to run in a fresh terminal — do NOT launch DOOM here.
     // The statusline/hook context cannot take over Claude Code's own terminal.
@@ -180,6 +195,7 @@ switch (cmd) {
       '  game doom            — switch to DOOM WASM daemon frame (Phase B)',
       '  rows <N>             — set banner height (2..30 rows)',
       '  aspect <4:3|16:10|stretch> — set DOOM frame aspect ratio (default: 4:3)',
+      '  style <quad|half>    — set render style: quad (2×2 blocks, default) or half (▀ classic)',
       '  fetch-doom           — download DOOM WASM assets into vendor/doom/',
       '  play                 — print the command to play DOOM in a fresh terminal',
       '  setup [--yes] [--no-iterm]',

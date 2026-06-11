@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.3.0] — 2026-06-11
+
+### Added
+- **Adaptive quadrant renderer** (`renderQuadrants` in `lib/render.mjs`): uses all 16 Unicode Block Elements (U+2580–U+259F) to pack a 2×2 pixel quad per cell — doubles horizontal detail vs the previous `▀`-only renderer while remaining universally supported.
+- `lib/postfx.mjs` — two in-place post-processing passes applied after downscaling:
+  - `sharpen(buf, w, h, amount=0.6)` — unsharp mask (3×3 box blur, edge-clamped) that lifts edge contrast noticeably in dark DOOM corridors.
+  - `toneLift(buf, { gamma=0.88, saturation=1.12 })` — gamma expansion + per-pixel saturation lift around luma; brightens midtones and restores colour on terminal backgrounds without blowing out highlights.
+- `style` config key (`"quad"` | `"half"`, default `"quad"`) in `lib/state.mjs` and persisted via `~/.claude/afk-arcade/config.json`.
+- `/afk style <quad|half>` subcommand in `scripts/afk-ctl.mjs`; `style` is now shown in `/afk status` output.
+- Sharpen + tone lift also applied on the `half`-block path (no-cost improvement for existing users).
+- Quad fire: statusline fire simulation runs at 2× horizontal resolution when `style=quad` (`createFire(width*2, pixH)`); dimension mismatch in existing `.fire` files triggers automatic re-initialisation (pre-existing behavior).
+- `test/render.test.mjs` — 16 unit tests covering glyph selection, color codes, SGR batching, output dimensions, sharpen range/contrast, toneLift monotonicity/identity, and a 160×60 performance benchmark (consistently 10–15 ms).
+- `test/run.mjs` Phase D wires the render tests into the main suite.
+
+### Changed
+- `scripts/daemon.mjs` `writeFrame`: routes through quad or half-block pipeline based on `config.style`; both paths apply sharpen + tone lift.
+- `scripts/statusline.mjs`: fire render path selects `renderQuadrants` or `renderHalfBlocks` based on `config.style`.
+- `scripts/play.mjs` non-gfx fullscreen path: samples at `gameWcells*2` horizontal resolution and renders with `renderQuadrants` when `style=quad`; shows `[quad]` / `[half]` indicator in the status row. `--gfx` pixel-protocol path is untouched.
+
+---
+
 ## [0.2.1] — 2026-06-11
 
 ### Added
@@ -72,6 +93,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Core test suite (`test/run.mjs`, `test/doom.test.mjs`) — DOOM tests skip cleanly when vendor assets absent
 - Zero npm dependencies — pure Node.js ESM
 
+[0.3.0]: https://github.com/ezequielmm/claude-doom/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/ezequielmm/claude-doom/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/ezequielmm/claude-doom/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/ezequielmm/claude-doom/compare/v0.1.1...v0.1.2
