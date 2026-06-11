@@ -198,6 +198,19 @@ Switch styles at any time:
 
 ## Experimental: pixel banner (kitty Unicode placeholders)
 
+### Backdrop mode — the game as your terminal's background
+
+`/afk backdrop on` turns the darkened DOOM frame into the **background of the whole
+terminal**: the frame is transmitted out-of-band to the session's tty as a kitty
+graphics placement with a negative z-index (`z=-2`), so the terminal composites the
+game UNDER Claude Code's UI — your conversation floats over DOOM, animated, while the
+banner collapses to a single HUD line. Verified live in Warp. Requires a terminal with
+kitty graphics support (Warp, kitty, WezTerm, Ghostty); terminals without it (e.g.
+Apple Terminal) silently ignore the image — use `/afk backdrop off` there. Darkening
+is tunable via the `backdropDim` config key (default `0.4`).
+
+### Pixel banner (U=1 placeholders)
+
 `/afk style pixel` enables an experimental mode that renders the DOOM banner as a **real PNG image inside the Claude Code statusline** using the [kitty graphics protocol Unicode placeholder](https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders) (U=1 virtual placements).
 
 ### Requirements

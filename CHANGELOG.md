@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.5.0] — 2026-06-11
+
+### Added
+- **Backdrop mode** (`/afk backdrop on|off`) — the darkened DOOM frame becomes the
+  WHOLE terminal background: transmitted out-of-band to the session's tty as a kitty
+  graphics placement with negative z-index (`z=-2`), so the terminal composites the
+  game UNDER Claude Code's UI. Verified live in Warp: the conversation floats over
+  the game, animated at the statusline cadence. The banner collapses to a single HUD
+  line while active. `backdropDim` config (default 0.4) controls darkening.
+- Daemon self-recycle watchdog: exits cleanly when its output freezes (>90s) or after
+  a 30-minute lifetime; the statusline respawns a fresh daemon within a second.
+- Low-contrast quadrant collapse: near-equal fg/bg cells render as a single colored
+  space — immune to terminal minimum-contrast passes (Warp) that whitened them.
+
+### Fixed
+- Per-session transmission bookkeeping (backdrop/pixel) — concurrent sessions in
+  different terminals no longer clobber each other's discovered tty path.
+- 12s frame freshness window hides daemon recycles behind a frozen frame instead of
+  flashing the fire fallback.
+
 ## [0.4.1] — 2026-06-11
 
 ### Added
