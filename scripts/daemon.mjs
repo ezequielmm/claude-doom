@@ -201,6 +201,18 @@ async function main() {
   let tickCount = 0;
   let frameCount = 0;
 
+  // Self-recycle watchdog. A long-running engine was observed to wedge into a
+  // static washed-out frame (attract loop stuck) — the banner then looks
+  // frozen, and low-contrast terminals (Warp's minimum-contrast pass) render
+  // it as a white glyph maze. Rather than heal the engine in place, exit
+  // cleanly: the statusline auto-respawns a fresh daemon within a second
+  // (spawn-lock guarded). A hard lifetime cap adds belt-and-suspenders.
+  const bootedAt = Date.now();
+  const LIFETIME_MS = 30 * 60 * 1000;
+  const STALE_OUTPUT_MS = 90 * 1000;
+  let prevSignature = 0;
+  let lastSignatureChangeAt = Date.now();
+
   // Read config once for debug gating (re-read inside writeFrame for style)
   const _initCfg = readConfig();
 
@@ -231,6 +243,21 @@ async function main() {
           }
         }
         writeFrame(engine, frameCount);
+
+        // Staleness + lifetime recycle checks (see watchdog comment above).
+        if (lastFrameSignature !== prevSignature) {
+          prevSignature = lastFrameSignature;
+          lastSignatureChangeAt = now;
+        } else if (now - lastSignatureChangeAt > STALE_OUTPUT_MS) {
+          try { dbgLog('daemon', { recycle: 'stale-output', frame: frameCount }); } catch { /* ignore */ }
+          clearInterval(tickTimer);
+          process.exit(0);
+        }
+        if (now - bootedAt > LIFETIME_MS) {
+          try { dbgLog('daemon', { recycle: 'lifetime-cap', frame: frameCount }); } catch { /* ignore */ }
+          clearInterval(tickTimer);
+          process.exit(0);
+        }
       }
     } catch {
       // Engine error — stop ticking but keep process alive for pidfile cleanup
@@ -364,6 +391,13 @@ function writeFrame(engine, frameCount) {
     const ansContent = lines.join('\n');
     ansBytes = Buffer.byteLength(ansContent, 'utf8');
 
+    // Cheap content signature for the staleness watchdog: strided char sum.
+    let sig = ansBytes;
+    for (let i = 0; i < ansContent.length; i += 101) {
+      sig = (sig * 31 + ansContent.charCodeAt(i)) >>> 0;
+    }
+    lastFrameSignature = sig;
+
     writeAtomic(FRAME_ANS, ansContent);
 
     // Emit diagnostic log for sampled frames
@@ -388,6 +422,9 @@ function writeFrame(engine, frameCount) {
     // Non-fatal — next tick will retry
   }
 }
+
+// Updated by writeFrame; consumed by the staleness watchdog in main().
+let lastFrameSignature = 0;
 
 /**
  * Remove the doom tmp files on graceful SIGTERM exit.
