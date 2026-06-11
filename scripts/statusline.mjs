@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { readConfig, resolveSessionState, TMP_ROOT } from '../lib/state.mjs';
 import { createFire, stepFire, heatToRgb, saveFire, loadFire } from '../lib/fire.mjs';
 import { renderHalfBlocks, renderQuadrants } from '../lib/render.mjs';
+import { kittyVirtualImage, kittyPlaceholderLines } from '../lib/gfx-protocol.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -239,8 +240,9 @@ async function main() {
 
   // 6. Fire persistence
   const style = config.style ?? 'quad';
-  // For quad mode run the fire simulation at double width so each cell has 2 columns
-  const fireW = style === 'quad' ? width * 2 : width;
+  // Quad and pixel modes run the fire simulation at double width (each cell covers 2 columns).
+  // Pixel mode falls back to quad-style fire when DOOM is not running.
+  const fireW = (style === 'quad' || style === 'pixel') ? width * 2 : width;
 
   const fireFileId = sessionId ?? 'global';
   const fireFile = path.join(FIRE_SESSION_DIR, `${fireFileId}.fire`);
@@ -272,7 +274,82 @@ async function main() {
     } catch { /* frame absent */ }
 
     if (frameAge < 5000) {
-      // Daemon is alive and fresh — use its frame
+      // Daemon is alive and fresh — use its frame.
+      // For pixel style, attempt out-of-band PNG transmission + placeholder text.
+      const doomFramePng = path.join(doomDir, 'frame.png');
+
+      if (style === 'pixel' && !process.env.AFK_ARCADE_NO_PIXEL) {
+        // Pixel path: transmit PNG directly to /dev/tty, emit placeholder lines to stdout.
+        //
+        // Preconditions (all must hold — otherwise fall through to quad frame.ans):
+        //   1. frame.png exists and is fresh (< 5s old)
+        //   2. /dev/tty is writable
+        //
+        // The pixel-tx.json bookkeeping file (TMP_ROOT/pixel-tx.json) tracks the
+        // last transmitted mtime so we only re-transmit when the PNG has changed.
+        // This limits /dev/tty writes to ≤4/s (daemon frame rate) while keeping
+        // placeholder-text regeneration cheap on every statusline poll (~1/s).
+        //
+        // Escape hatch: AFK_ARCADE_NO_PIXEL=1 hard-disables; `/afk style quad` reverts.
+        let pixelOk = false;
+        try {
+          const pngStat = fs.statSync(doomFramePng);
+          if (Date.now() - pngStat.mtimeMs < 5000) {
+            // Try opening /dev/tty for writing (may fail in piped/CI contexts).
+            let ttyFd = -1;
+            try { ttyFd = fs.openSync('/dev/tty', 'w'); } catch { /* tty unavailable */ }
+
+            if (ttyFd >= 0) {
+              try {
+                // Compute game dimensions (same math as daemon.mjs / quad path).
+                const { computeGameWidth: cgw } = await import('../lib/scale.mjs');
+                const pixelAspect = config.aspect ?? '4:3';
+                const gameW       = cgw(pixelAspect, rows * 2, width);
+                const leftPad     = Math.floor((width - gameW) / 2);
+
+                // Re-transmit only when the PNG file has changed since last time.
+                const txJsonPath = path.join(TMP_ROOT, 'pixel-tx.json');
+                const txState    = (() => { try { return JSON.parse(fs.readFileSync(txJsonPath, 'utf8')); } catch { return {}; } })();
+
+                if (pngStat.mtimeMs !== (txState.lastMtime ?? 0)) {
+                  const pngBuf = fs.readFileSync(doomFramePng);
+                  const txStr  = kittyVirtualImage(pngBuf, { imageId: 42, cols: gameW, rows });
+                  fs.writeSync(ttyFd, txStr);
+
+                  // Persist bookkeeping (non-fatal if write fails).
+                  try {
+                    const txTmp = txJsonPath + '.tmp';
+                    fs.writeFileSync(txTmp, JSON.stringify({
+                      lastMtime: pngStat.mtimeMs,
+                      attempts: (txState.attempts ?? 0) + 1,
+                      since:    txState.since ?? Date.now(),
+                    }), 'utf8');
+                    fs.renameSync(txTmp, txJsonPath);
+                  } catch { /* non-fatal */ }
+                }
+
+                fs.closeSync(ttyFd);
+
+                // Emit placeholder text to stdout (flows through Claude Code renderer).
+                const hudLine = buildHudLine({
+                  state, modelObj: json.model, ctxObj: json.context_window,
+                  width, extraSuffix: 'pixel',
+                });
+                const phLines = kittyPlaceholderLines({ imageId: 42, cols: gameW, rows, leftPad });
+                process.stdout.write(hudLine + '\n' + phLines.join('\n') + '\n');
+                pixelOk = true;
+              } catch {
+                try { fs.closeSync(ttyFd); } catch { /* ignore */ }
+              }
+            }
+          }
+        } catch { /* stat failed or other error — fall through to quad frame.ans */ }
+
+        if (pixelOk) process.exit(0);
+        // Fall through to quad frame.ans below.
+      }
+
+      // Quad / half / pixel-fallback path: use frame.ans text content.
       try {
         const hudLine = buildHudLine({
           state,
@@ -352,7 +429,8 @@ async function main() {
     const idx = clamp(y, 0, pixH - 1) * fireW + clamp(x, 0, fireW - 1);
     return heatToRgb(fire.heat[idx]);
   };
-  const lines = style === 'quad'
+  // Pixel style falls back to quad rendering for the fire (no DOOM frame available).
+  const lines = (style === 'quad' || style === 'pixel')
     ? renderQuadrants(heatGetPixel, fireW, pixH, { truecolor })
     : renderHalfBlocks(heatGetPixel, width, pixH, { truecolor });
 

@@ -18,6 +18,7 @@ import { renderHalfBlocks, renderQuadrants } from '../lib/render.mjs';
 import { readConfig, TMP_ROOT } from '../lib/state.mjs';
 import { computeGameWidth, buildScaledBuffer, bufferGetPixel } from '../lib/scale.mjs';
 import { sharpen, toneLift } from '../lib/postfx.mjs';
+import { encodePngFast } from '../lib/png.mjs';
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -27,6 +28,8 @@ const SOCKFILE  = path.join(DOOM_TMP, 'daemon.sock');
 const ERRFILE   = path.join(DOOM_TMP, 'daemon.err');
 const VIEWPORT  = path.join(DOOM_TMP, 'viewport.json');
 const FRAME_ANS = path.join(DOOM_TMP, 'frame.ans');
+// Written only when style === 'pixel'; the statusline reads this for U=1 placement.
+const FRAME_PNG = path.join(DOOM_TMP, 'frame.png');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -289,8 +292,28 @@ function writeFrame(engine) {
     const leftPad = Math.floor((cols - gameW) / 2);
     const pad     = leftPad > 0 ? ' '.repeat(leftPad) : '';
 
+    // ── Pixel style: write frame.png (half-res 2×2 box downscale) ────────────
+    // Also always write frame.ans (quad) as the universal fallback.
+    if (style === 'pixel') {
+      // Half-resolution: 640×400 is sharp enough and 4× cheaper than 1280×800.
+      // Clamp to at most the game content dimensions.
+      const halfW = Math.min(640, gameW * 4);
+      const halfH = Math.min(400, pxRows * 4);
+      const rgb = buildScaledBuffer(engine.getPixel, engine.width, engine.height, halfW, halfH);
+      // No sharpen/toneLift for the PNG path — the terminal renders raw pixels.
+      try {
+        const pngBuf = encodePngFast(rgb, halfW, halfH);
+        const tmp = FRAME_PNG + '.tmp';
+        fs.writeFileSync(tmp, pngBuf);
+        fs.renameSync(tmp, FRAME_PNG);
+      } catch {
+        // Non-fatal — statusline will fall back to quad frame.ans
+      }
+    }
+
+    // ── ANSI frame (quad or half-block) — always written as fallback ─────────
     let gameLines;
-    if (style === 'quad') {
+    if (style === 'quad' || style === 'pixel') {
       // Quad path: sample at double horizontal resolution so each cell covers 2×2 px
       const dstW = gameW * 2;
       const dstH = pxRows;

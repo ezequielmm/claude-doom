@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="../../LICENSE"><img src="https://img.shields.io/badge/licencia-MIT-blue.svg" alt="Licencia MIT" /></a>
-  <img src="https://img.shields.io/badge/versión-0.3.1-informational" alt="versión 0.3.1" />
+  <img src="https://img.shields.io/badge/versión-0.4.0-informational" alt="versión 0.4.0" />
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen" alt="Node >= 20" />
   <img src="https://img.shields.io/badge/dependencias-cero-success" alt="Cero dependencias" />
   <img src="https://img.shields.io/badge/Claude%20Code-%3E%3D2.1.153-blueviolet" alt="Claude Code >= 2.1.153" />
@@ -191,6 +191,42 @@ Cambiá el estilo en cualquier momento:
 ```sh
 /afk style quad   # bloques adaptativos 2×2 (predeterminado)
 /afk style half   # half-block clásico ▀
+/afk style pixel  # experimental — placeholders Unicode de kitty (ver abajo)
+```
+
+---
+
+## Experimental: banner pixel (placeholders Unicode de kitty)
+
+`/afk style pixel` activa un modo experimental que renderiza el banner de DOOM como una **imagen PNG real dentro del statusline de Claude Code** usando el [protocolo gráfico de kitty con Unicode placeholders](https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders) (virtual placements U=1).
+
+### Requisitos
+
+- Terminal con soporte del protocolo gráfico de kitty **y** Unicode placeholder (U=1).
+  Confirmado o planificado: **Warp**, **kitty**, **WezTerm**, **Ghostty**.
+- El modo DOOM debe estar activo (`/afk game doom`).
+
+### Cómo funciona
+
+El daemon escribe `frame.png` en `/tmp/afk-arcade/doom/` a ≤4 fps (media resolución con downscale 2×2 — suficiente calidad, 4× más barato). El statusline:
+
+1. Transmite el PNG **fuera de banda** directamente a `/dev/tty` mediante una secuencia APC con `U=1,q=2` (suprime todas las respuestas del terminal para que nada filtre al stdin de Claude Code).
+2. Emite **líneas de texto placeholder puro** al stdout: cada celda es `U+10EEEE` (el codepoint placeholder del spec) con dos diacríticos combinadores que codifican fila/columna, y un color de primer plano SGR que codifica el ID de imagen.
+
+Claude Code deja pasar el texto placeholder por su renderer. El terminal reemplaza cada celda con el pixel de la imagen transmitida.
+
+### Advertencia
+
+El renderer de Claude Code pasa secuencias de escape ANSI, pero su comportamiento con codepoints Unicode del plano astral y diacríticos combinadores no está garantizado en todas las versiones. Si ves caracteres rotos o salida corrupta, revertí con:
+
+```sh
+/afk style quad
+```
+
+o deshabilitá el modo pixel independientemente de la config:
+
+```sh
+AFK_ARCADE_NO_PIXEL=1 # en tu entorno
 ```
 
 ---
@@ -205,7 +241,7 @@ Cambiá el estilo en cualquier momento:
 | `/afk game doom` | Frames del daemon DOOM WASM (lanza el daemon automáticamente) |
 | `/afk rows <N>` | Altura del banner, 2–30 filas |
 | `/afk aspect <4:3\|16:10\|stretch>` | Relación de aspecto del frame (predeterminado: `4:3`) |
-| `/afk style <quad\|half>` | Estilo del renderer: `quad` (bloques 2×2, predeterminado) o `half` (clásico `▀`) |
+| `/afk style <quad\|half\|pixel>` | Estilo del renderer: `quad` (predeterminado), `half` (clásico `▀`), o `pixel` (experimental) |
 | `/afk play` | Lanzar DOOM en una pestaña Warp (macOS + Warp instalado); si no, imprimir el comando |
 | `/afk fetch-doom` | Descargar los assets DOOM WASM en `vendor/` |
 | `/afk setup [--yes] [--no-iterm]` | Instalador guiado — conecta statusline, descarga assets, ofrece iTerm2 |
@@ -222,7 +258,7 @@ Cambiá el estilo en cualquier momento:
 | `game` | `"fire"` | Modo de juego activo (`fire` o `doom`) |
 | `rows` | `5` | Altura del banner en filas de terminal |
 | `aspect` | `"4:3"` | Relación de aspecto de los frames DOOM |
-| `style` | `"quad"` | Estilo del renderer: `quad` (bloques 2×2 adaptativos) o `half` (clásico `▀`) |
+| `style` | `"quad"` | Estilo del renderer: `quad` (bloques 2×2 adaptativos), `half` (clásico `▀`), o `pixel` (experimental) |
 
 Edita el archivo directamente o usa los comandos `/afk` — escriben de inmediato.
 

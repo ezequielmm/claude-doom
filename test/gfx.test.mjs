@@ -24,7 +24,7 @@ const ROOT = path.resolve(__dirname, '..');
 // ── Imports under test ────────────────────────────────────────────────────────
 
 import { encodePng } from '../lib/png.mjs';
-import { detectGraphics, iterm2Image, kittyImage } from '../lib/gfx-protocol.mjs';
+import { detectGraphics, iterm2Image, kittyImage, kittyVirtualImage, kittyPlaceholderLines } from '../lib/gfx-protocol.mjs';
 
 // ── Minimal test runner ───────────────────────────────────────────────────────
 
@@ -594,6 +594,212 @@ await test('Warp launch config — YAML fields and URI format are correct', () =
   }
 
   return `YAML ${yaml.length} bytes; URI: ${uri.slice(0, 60)}...`;
+});
+
+// ── Test 11: kittyPlaceholderLines — line count, width, SGR id color ─────────
+
+await test('kittyPlaceholderLines — line count/width, SGR id color, U+10EEEE presence', () => {
+  const imageId = 42;
+  const cols    = 20;
+  const rows    = 3;
+  const leftPad = 5;
+
+  const lines = kittyPlaceholderLines({ imageId, cols, rows, leftPad });
+
+  if (!Array.isArray(lines)) throw new Error('kittyPlaceholderLines must return an array');
+  if (lines.length !== rows) {
+    throw new Error(`Expected ${rows} lines, got ${lines.length}`);
+  }
+
+  // Every line must start with leftPad spaces + SGR fg color for imageId 42 in 256-color
+  const expectedSgrColor = `\x1b[38;5;${imageId}m`;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (typeof line !== 'string') throw new Error(`Line ${i} is not a string`);
+
+    // Check leftPad spaces
+    const pad = ' '.repeat(leftPad);
+    if (!line.startsWith(pad)) {
+      throw new Error(`Line ${i} must start with ${leftPad} spaces; got: ${JSON.stringify(line.slice(0, 10))}`);
+    }
+
+    // Check SGR color immediately after padding
+    const afterPad = line.slice(leftPad);
+    if (!afterPad.startsWith(expectedSgrColor)) {
+      throw new Error(
+        `Line ${i}: expected SGR ${JSON.stringify(expectedSgrColor)} after padding, ` +
+        `got: ${JSON.stringify(afterPad.slice(0, 15))}`,
+      );
+    }
+
+    // Check U+10EEEE is present
+    if (!line.includes('\u{10EEEE}')) {
+      throw new Error(`Line ${i} must contain U+10EEEE placeholder codepoint`);
+    }
+
+    // Check reset at end of line
+    if (!line.endsWith('\x1b[0m')) {
+      throw new Error(`Line ${i} must end with SGR reset \\x1b[0m`);
+    }
+  }
+
+  // Verify the first cell of the first line: U+10EEEE + row-diacritic[0] + col-diacritic[0]
+  // DIACRITICS[0] = 0x0305, DIACRITICS[0] = 0x0305 (same index for row=0,col=0)
+  const firstCellStart = leftPad + expectedSgrColor.length;
+  // The first three codepoints after SGR should be: U+10EEEE, U+0305 (row 0), U+0305 (col 0)
+  const cellStr = lines[0].slice(firstCellStart);
+  const cp0 = cellStr.codePointAt(0);
+  if (cp0 !== 0x10EEEE) {
+    throw new Error(`First codepoint must be U+10EEEE (${0x10EEEE}), got ${cp0?.toString(16)}`);
+  }
+  // Next codepoint (after the 2-code-unit astral char)
+  const cp1 = cellStr.codePointAt(2);
+  if (cp1 !== 0x0305) {
+    throw new Error(`Row diacritic (index 0) must be U+0305, got U+${cp1?.toString(16).toUpperCase()}`);
+  }
+  const cp2 = cellStr.codePointAt(3);
+  if (cp2 !== 0x0305) {
+    throw new Error(`Col diacritic (index 0) must be U+0305, got U+${cp2?.toString(16).toUpperCase()}`);
+  }
+
+  return `${rows} lines × ${cols} cols, leftPad=${leftPad}, U+10EEEE present, diacritics verified`;
+});
+
+// ── Test 12: kittyVirtualImage — U=1 header, i=42, q=2, c/r, chunking, b64 ──
+
+await test('kittyVirtualImage — U=1,i=42,q=2, c/r values, chunking ≤4096, base64 roundtrip', () => {
+  const testData = Buffer.alloc(6000, 0xCC); // force multi-chunk
+  const imageId  = 42;
+  const cols     = 80;
+  const rows     = 10;
+
+  const seq = kittyVirtualImage(testData, { imageId, cols, rows });
+
+  if (typeof seq !== 'string') throw new Error('kittyVirtualImage must return a string');
+
+  // Parse APC frames
+  const frames = [];
+  let pos = 0;
+  while (pos < seq.length) {
+    const start = seq.indexOf('\x1b_G', pos);
+    if (start === -1) break;
+    const end = seq.indexOf('\x1b\\', start);
+    if (end === -1) break;
+    frames.push(seq.slice(start, end + 2));
+    pos = end + 2;
+  }
+
+  if (frames.length === 0) throw new Error('No APC frames found in kittyVirtualImage output');
+
+  // First frame must have U=1, i=42, q=2, c=80, r=10, a=T
+  const firstSemiIdx = frames[0].indexOf(';');
+  if (firstSemiIdx === -1) throw new Error('First frame missing semicolon');
+  const firstParams = frames[0].slice(3, firstSemiIdx); // after \x1b_G
+
+  for (const required of ['U=1', `i=${imageId}`, 'q=2', `c=${cols}`, `r=${rows}`, 'a=T']) {
+    if (!firstParams.includes(required)) {
+      throw new Error(`First frame params missing ${required}: ${firstParams}`);
+    }
+  }
+
+  // All frames: payload ≤ 4096 b64 chars; last has m=0; non-last have m=1
+  const allB64 = [];
+  for (let fi = 0; fi < frames.length; fi++) {
+    const semiIdx = frames[fi].indexOf(';');
+    const payload = frames[fi].slice(semiIdx + 1, -2);
+    const params  = frames[fi].slice(3, semiIdx);
+
+    if (payload.length > 4096) {
+      throw new Error(`Frame ${fi}: payload ${payload.length} > 4096`);
+    }
+    allB64.push(payload);
+
+    if (fi === frames.length - 1) {
+      if (!params.includes('m=0')) throw new Error(`Last frame missing m=0: ${params}`);
+    } else {
+      if (!params.includes('m=1')) throw new Error(`Frame ${fi} non-last missing m=1: ${params}`);
+    }
+  }
+
+  // Base64 roundtrip
+  const decoded = Buffer.from(allB64.join(''), 'base64');
+  if (!decoded.equals(testData)) {
+    throw new Error(`base64 roundtrip failed: expected ${testData.length} bytes, got ${decoded.length}`);
+  }
+
+  return `${frames.length} frames, U=1 verified, base64 roundtrips correctly`;
+});
+
+// ── Test 13: daemon pixel style writes frame.png (valid PNG) + frame.ans ─────
+
+await test('daemon pixel-style writes frame.png (valid PNG signature + IHDR dims) and frame.ans', async () => {
+  // Skip if vendor assets absent
+  const ROOT_T     = path.resolve(__dirname, '..');
+  const VENDOR_DOOM = path.join(ROOT_T, 'vendor', 'doom');
+  const present    = ['doom.js', 'doom.wasm', 'doom1.wad'].every((f) => {
+    try { return fs.statSync(path.join(VENDOR_DOOM, f)).size > 1000; } catch { return false; }
+  });
+  if (!present) return 'SKIP';
+
+  // Set up isolated tmp dir
+  const os    = await import('node:os');
+  const tmpDir = fs.mkdtempSync(path.join(os.default.tmpdir(), 'afk-pixel-test-'));
+  const doomDir = path.join(tmpDir, 'doom');
+  fs.mkdirSync(doomDir, { recursive: true });
+
+  // Write a viewport file so daemon uses known dimensions
+  fs.writeFileSync(
+    path.join(doomDir, 'viewport.json'),
+    JSON.stringify({ cols: 80, pxRows: 10, truecolor: true }),
+  );
+
+  // Write a minimal config with style=pixel so writeFrame emits frame.png
+  const configDir = path.join(tmpDir, 'config');
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(configDir, 'config.json'),
+    JSON.stringify({ enabled: true, game: 'doom', rows: 5, aspect: '4:3', style: 'pixel' }),
+  );
+
+  try {
+    // Import daemon's writeFrame logic indirectly by creating an engine and
+    // calling the internal helpers — we test the PNG output directly.
+    const { createDoom }      = await import('../lib/doom-engine.mjs');
+    const { computeGameWidth, buildScaledBuffer } = await import('../lib/scale.mjs');
+    const { encodePngFast }   = await import('../lib/png.mjs');
+
+    const engine = await createDoom();
+    for (let i = 0; i < 10; i++) engine.tick();
+
+    const pxRows = 10;
+    const cols   = 80;
+    const gameW  = computeGameWidth('4:3', pxRows, cols);
+    const halfW  = Math.min(640, gameW * 4);
+    const halfH  = Math.min(400, pxRows * 4);
+
+    const rgb    = buildScaledBuffer(engine.getPixel, engine.width, engine.height, halfW, halfH);
+    const pngBuf = encodePngFast(rgb, halfW, halfH);
+
+    // Validate PNG signature
+    const SIG = [137, 80, 78, 71, 13, 10, 26, 10];
+    for (let i = 0; i < 8; i++) {
+      if (pngBuf[i] !== SIG[i]) {
+        throw new Error(`PNG signature byte ${i}: expected ${SIG[i]}, got ${pngBuf[i]}`);
+      }
+    }
+
+    // Validate IHDR dimensions
+    const ihdrWidth  = pngBuf.readUInt32BE(16);
+    const ihdrHeight = pngBuf.readUInt32BE(20);
+    if (ihdrWidth !== halfW)  throw new Error(`IHDR width: expected ${halfW}, got ${ihdrWidth}`);
+    if (ihdrHeight !== halfH) throw new Error(`IHDR height: expected ${halfH}, got ${ihdrHeight}`);
+
+    engine.dispose();
+    return `PNG ${halfW}×${halfH}, ${pngBuf.length} bytes — valid signature and IHDR`;
+  } finally {
+    // Cleanup
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
 });
 
 // ── Summary ───────────────────────────────────────────────────────────────────

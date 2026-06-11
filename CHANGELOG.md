@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.4.0] — 2026-06-11
+
+### Added
+- **Experimental pixel banner via kitty Unicode placeholders** (`/afk style pixel`): when the DOOM daemon is active, the statusline transmits a PNG out-of-band directly to `/dev/tty` using an APC sequence with `a=T,U=1,q=2` (virtual placement, suppressed responses), then emits pure-text placeholder lines to stdout. Each placeholder cell is U+10EEEE plus two combining diacritics (row index and column index from the official spec table) with the image ID encoded in the SGR foreground color using 256-color mode (`\x1b[38;5;<id>m`). The daemon writes `frame.png` at ≤4 fps (640×400 half-res 2×2 box downscale) alongside `frame.ans`.
+- `kittyVirtualImage(pngBuffer, { imageId, cols, rows })` in `lib/gfx-protocol.mjs`: builds the `U=1` chunked APC transmission string (writes to `/dev/tty`, not stdout).
+- `kittyPlaceholderLines({ imageId, cols, rows, leftPad })` in `lib/gfx-protocol.mjs`: returns an array of placeholder text lines for the virtual placement.
+- `DIACRITICS` table (241 entries) in `lib/gfx-protocol.mjs`, sourced from the official kitty spec download at `https://sw.kovidgoyal.net/kitty/_downloads/f0a0de9ec8d9ff4456206db8e0814937/rowcolumn-diacritics.txt`, with a citation comment.
+- `FRAME_PNG` constant in `scripts/daemon.mjs`; pixel-style `writeFrame` path encodes a half-res PNG via `encodePngFast` and writes it atomically to `DOOM_TMP/frame.png`.
+- `AFK_ARCADE_NO_PIXEL=1` env var hard-disables pixel mode regardless of config.
+- `pixel-tx.json` bookkeeping in `TMP_ROOT` tracks last transmitted PNG mtime to avoid redundant `/dev/tty` writes.
+- Style `"pixel"` validated in `scripts/afk-ctl.mjs` style subcommand with help text.
+- 3 new tests in `test/gfx.test.mjs` (tests 11–13): placeholder line count/width/SGR color, `kittyVirtualImage` envelope (U=1, i=42, q=2, c/r, chunking, base64 roundtrip), and daemon pixel path PNG signature + IHDR dims validation.
+
+### Changed
+- `lib/gfx-protocol.mjs`: refactored `kittyImage` to use the shared `_kittyChunks` helper (also used by `kittyVirtualImage`) — no behavior change.
+- `lib/state.mjs`: `CONFIG_DEFAULTS.style` comment expanded to document `"pixel"` option.
+- `scripts/statusline.mjs`: pixel style path in the DOOM section; fires fallback to quad-style fire and quad-style ANSI frame when pixel conditions are not met. `fireW` now covers `style === 'pixel'` (same as `'quad'`).
+- `scripts/daemon.mjs`: `writeFrame` always writes `frame.ans` (quad ANSI, universal fallback); additionally writes `frame.png` when `style === 'pixel'`.
+- README and `docs/i18n/README.es.md`: new "Experimental: pixel banner" section with requirements, mechanics, caveat, and escape hatches.
+
+---
+
 ## [0.3.1] — 2026-06-11
 
 ### Added
@@ -108,6 +130,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Core test suite (`test/run.mjs`, `test/doom.test.mjs`) — DOOM tests skip cleanly when vendor assets absent
 - Zero npm dependencies — pure Node.js ESM
 
+[0.4.0]: https://github.com/ezequielmm/claude-doom/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/ezequielmm/claude-doom/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/ezequielmm/claude-doom/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/ezequielmm/claude-doom/compare/v0.2.0...v0.2.1

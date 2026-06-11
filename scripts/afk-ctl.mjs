@@ -159,11 +159,13 @@ switch (cmd) {
 
   case 'style': {
     const style = args[1];
-    if (!['quad', 'half'].includes(style)) {
+    if (!['quad', 'half', 'pixel'].includes(style)) {
       process.stdout.write(
-        `afk-arcade: unknown style "${style ?? ''}". Valid options: quad, half\n` +
-        '  quad — adaptive 2×2 quadrant blocks (2× horizontal detail, default)\n' +
-        '  half — classic half-block ▀ rendering\n',
+        `afk-arcade: unknown style "${style ?? ''}". Valid options: quad, half, pixel\n` +
+        '  quad  — adaptive 2×2 quadrant blocks (2× horizontal detail, default)\n' +
+        '  half  — classic half-block ▀ rendering\n' +
+        '  pixel — EXPERIMENTAL: kitty Unicode placeholder banner (kitty/Warp/WezTerm/Ghostty\n' +
+        '          with kitty graphics + U=1 support required; revert with /afk style quad)\n',
       );
       process.exit(1);
     }
@@ -264,7 +266,9 @@ switch (cmd) {
       '  game doom            — switch to DOOM WASM daemon frame (Phase B)',
       '  rows <N>             — set banner height (2..40 rows)',
       '  aspect <4:3|16:10|stretch> — set DOOM frame aspect ratio (default: 4:3)',
-      '  style <quad|half>    — set render style: quad (2×2 blocks, default) or half (▀ classic)',
+      '  style <quad|half|pixel>',
+      '                       — set render style: quad (2×2 blocks, default), half (▀ classic),',
+      '                         or pixel (EXPERIMENTAL kitty Unicode placeholder banner)',
       '  fetch-doom           — download DOOM WASM assets into vendor/doom/',
       '  play                 — print the command to play DOOM in a fresh terminal',
       '  setup [--yes] [--no-iterm]',
