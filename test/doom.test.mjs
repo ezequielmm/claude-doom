@@ -432,6 +432,16 @@ export async function runDoomTests(counters, runner) {
 
   process.stdout.write('\n── doom tests ─────────────────────────────────────────\n');
 
+  // The daemon singleton is global (Unix socket): a live daemon from a real
+  // session would make the test daemons yield and the e2e tests fail. Kill it
+  // and clear its files — any live statusline respawns it within seconds.
+  spawnSync('pkill', ['-f', path.join(ROOT, 'scripts', 'daemon.mjs')]);
+  await new Promise((r) => setTimeout(r, 500));
+  const doomTmpDir = path.join(os.tmpdir(), 'afk-arcade', 'doom');
+  for (const f of ['daemon.pid', 'daemon.sock', 'spawn.lock']) {
+    try { fs.rmSync(path.join(doomTmpDir, f), { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+
   for (const t of tests) {
     const t0 = Date.now();
     try {

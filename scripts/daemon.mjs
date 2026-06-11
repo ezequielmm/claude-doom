@@ -11,17 +11,18 @@
  */
 
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
-import os from 'node:os';
 import { createDoom } from '../lib/doom-engine.mjs';
 import { renderHalfBlocks } from '../lib/render.mjs';
-import { readConfig } from '../lib/state.mjs';
+import { readConfig, TMP_ROOT } from '../lib/state.mjs';
 import { computeGameWidth, buildScaledBuffer, bufferGetPixel } from '../lib/scale.mjs';
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
-const DOOM_TMP  = path.join(os.tmpdir(), 'afk-arcade', 'doom');
+const DOOM_TMP  = path.join(TMP_ROOT, 'doom');
 const PIDFILE   = path.join(DOOM_TMP, 'daemon.pid');
+const SOCKFILE  = path.join(DOOM_TMP, 'daemon.sock');
 const ERRFILE   = path.join(DOOM_TMP, 'daemon.err');
 const VIEWPORT  = path.join(DOOM_TMP, 'viewport.json');
 const FRAME_ANS = path.join(DOOM_TMP, 'frame.ans');
@@ -39,8 +40,23 @@ function writeFatal(msg) {
   } catch { /* last resort */ }
 }
 
+// Inode of the socket file this process bound — 0 until the singleton is won.
+let ownedSockIno = 0;
+
+/**
+ * Remove the pidfile and socket — but only the ones THIS process owns, so a
+ * yielding/usurped daemon never deletes the live owner's files on exit.
+ */
 function removePidfile() {
-  try { fs.unlinkSync(PIDFILE); } catch { /* ignore */ }
+  try {
+    const owner = parseInt(fs.readFileSync(PIDFILE, 'utf8').trim(), 10);
+    if (owner === process.pid) fs.unlinkSync(PIDFILE);
+  } catch { /* missing or not ours */ }
+  try {
+    if (ownedSockIno && fs.statSync(SOCKFILE).ino === ownedSockIno) {
+      fs.unlinkSync(SOCKFILE);
+    }
+  } catch { /* missing or not ours */ }
 }
 
 /**
@@ -57,65 +73,53 @@ function writeAtomic(dest, data) {
 // ── Singleton guard ───────────────────────────────────────────────────────────
 
 /**
- * Check if pid refers to a live process.
- * @param {number} pid
- * @returns {boolean}
+ * Acquire the daemon singleton by binding a Unix domain socket. The kernel
+ * makes bind() exclusive — no file read/write interleaving can ever let two
+ * racers both win. If the address is in use, a connect() probe distinguishes
+ * a live daemon (yield) from a stale socket file left by a crash or SIGKILL
+ * (unlink and rebind once). The pidfile is written only AFTER winning the
+ * bind, so it is informational and always names the single true owner.
+ *
+ * @returns {Promise<void>}  resolves once this process owns the singleton
  */
-function isProcessAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function checkSingleton() {
+function acquireSingleton() {
   mkdirp(DOOM_TMP);
-
-  // Claim the pidfile with an exclusive create BEFORE any heavy init. If the
-  // create fails, wait for any concurrent writer to finish before reading —
-  // reading mid-write yields an empty file, which must not be mistaken for a
-  // stale pidfile (that mistake lets two racers both "win").
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      fs.writeFileSync(PIDFILE, String(process.pid), { flag: 'wx' });
-      break;
-    } catch {
-      sleepMs(120);
-      let existingPid = NaN;
-      try {
-        existingPid = parseInt(fs.readFileSync(PIDFILE, 'utf8').trim(), 10);
-      } catch { /* unreadable */ }
-      if (!isNaN(existingPid) && existingPid !== process.pid && isProcessAlive(existingPid)) {
-        process.exit(0);
-      }
-      removePidfile();
-    }
-  }
-
-  // Settle, then verify undisputed ownership: the pidfile holds exactly one
-  // pid, so exactly one racer survives this check no matter the interleaving.
-  // If we lost (or the file vanished), exit — the statusline respawns within
-  // a second and the next claim is uncontested.
-  sleepMs(150);
-  let owner = NaN;
-  try {
-    owner = parseInt(fs.readFileSync(PIDFILE, 'utf8').trim(), 10);
-  } catch { /* missing — treat as lost */ }
-  if (owner !== process.pid) {
-    process.exit(0);
-  }
-}
-
-/**
- * Synchronous sleep without a child process — Atomics.wait on a throwaway
- * buffer. Fine here: the daemon has not started its tick loop yet.
- * @param {number} ms
- */
-function sleepMs(ms) {
-  const sab = new SharedArrayBuffer(4);
-  Atomics.wait(new Int32Array(sab), 0, 0, ms);
+  return new Promise((resolve) => {
+    const tryBind = (retried) => {
+      const srv = net.createServer((conn) => conn.destroy());
+      srv.on('error', (err) => {
+        if (err.code !== 'EADDRINUSE' || retried) {
+          process.exit(0);
+        }
+        const probeOnce = (attempt) => {
+          const probe = net.connect(SOCKFILE);
+          probe.setTimeout(1000);
+          probe.on('connect', () => { probe.destroy(); process.exit(0); });
+          probe.on('timeout', () => { probe.destroy(); process.exit(0); });
+          probe.on('error', () => {
+            probe.destroy();
+            if (attempt === 0) {
+              // A daemon that just bound may not be accepting yet — re-probe
+              // after a beat instead of stealing a possibly-live socket.
+              setTimeout(() => probeOnce(1), 300);
+              return;
+            }
+            // Refused twice — genuinely stale. Clear it and rebind once.
+            try { fs.unlinkSync(SOCKFILE); } catch { /* already gone */ }
+            tryBind(true);
+          });
+        };
+        probeOnce(0);
+      });
+      srv.listen(SOCKFILE, () => {
+        srv.unref();
+        try { ownedSockIno = fs.statSync(SOCKFILE).ino; } catch { ownedSockIno = 0; }
+        fs.writeFileSync(PIDFILE, String(process.pid), 'utf8');
+        resolve();
+      });
+    };
+    tryBind(false);
+  });
 }
 
 // ── Viewport ──────────────────────────────────────────────────────────────────
@@ -153,7 +157,7 @@ function readViewport() {
 
 async function main() {
   // Singleton check — exit if another daemon is already running
-  checkSingleton();
+  await acquireSingleton();
 
   // Clean up pidfile on graceful exit
   process.on('SIGTERM', () => {
@@ -196,6 +200,17 @@ async function main() {
       const now = Date.now();
       if (now - lastFrameAt >= FRAME_INTERVAL_MS) {
         lastFrameAt = now;
+        // Self-defense: if our socket file vanished or was replaced (inode
+        // changed), another daemon usurped the singleton — yield quietly and
+        // leave all files to the new owner.
+        if (ownedSockIno) {
+          let usurped = false;
+          try { usurped = fs.statSync(SOCKFILE).ino !== ownedSockIno; } catch { usurped = true; }
+          if (usurped) {
+            clearInterval(tickTimer);
+            process.exit(0);
+          }
+        }
         writeFrame(engine);
       }
     } catch {

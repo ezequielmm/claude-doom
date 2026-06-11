@@ -11,10 +11,9 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { readConfig, resolveSessionState } from '../lib/state.mjs';
+import { readConfig, resolveSessionState, TMP_ROOT } from '../lib/state.mjs';
 import { createFire, stepFire, heatToRgb, saveFire, loadFire } from '../lib/fire.mjs';
 import { renderHalfBlocks } from '../lib/render.mjs';
 
@@ -22,7 +21,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const FIRE_SESSION_DIR = path.join(os.tmpdir(), 'afk-arcade', 'sessions');
+const FIRE_SESSION_DIR = path.join(TMP_ROOT, 'sessions');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -246,7 +245,7 @@ async function main() {
   // 7. Phase B contract: DOOM daemon frame handling
   let extraSuffix;
   if (config.game === 'doom') {
-    const doomDir  = path.join(os.tmpdir(), 'afk-arcade', 'doom');
+    const doomDir  = path.join(TMP_ROOT, 'doom');
     const doomFrame  = path.join(doomDir, 'frame.ans');
     const viewportFile = path.join(doomDir, 'viewport.json');
     const pidFile    = path.join(doomDir, 'daemon.pid');

@@ -13,6 +13,7 @@ import {
   CONFIG_DIR,
   RUNTIME_PATH,
   SESSION_DIR,
+  TMP_ROOT,
   ensureConfig,
   readJson,
   writeJsonAtomic,
@@ -78,7 +79,7 @@ function deleteSessionFiles(sessionId) {
   } catch { /* silent */ }
 
   try {
-    const fireFile = path.join(os.tmpdir(), 'afk-arcade', 'sessions', `${sessionId}.fire`);
+    const fireFile = path.join(TMP_ROOT, 'sessions', `${sessionId}.fire`);
     if (fs.existsSync(fireFile)) fs.unlinkSync(fireFile);
   } catch { /* silent */ }
 }
