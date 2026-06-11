@@ -1,0 +1,11 @@
+{
+  "name": "afk-arcade-marketplace",
+  "owner": { "name": "Gentleman Programming" },
+  "plugins": [
+    {
+      "name": "afk-arcade",
+      "source": "./",
+      "description": "Animated arcade banner inside Claude Code's statusline."
+    }
+  ]
+}

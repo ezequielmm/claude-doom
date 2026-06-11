@@ -1,0 +1,9 @@
+{
+  "name": "afk-arcade",
+  "version": "0.1.0",
+  "description": "Animated arcade banner inside Claude Code's statusline. Fire burns while Claude works, embers while it waits, DOOM demo when you're AFK.",
+  "author": { "name": "Gentleman Programming" },
+  "license": "MIT",
+  "hooks": "./hooks/hooks.json",
+  "commands": ["./commands/afk.md"]
+}
