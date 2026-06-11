@@ -192,6 +192,7 @@ async function main() {
 
   let lastFrameAt = 0;
   let tickCount = 0;
+  let frameCount = 0;
 
   const tickTimer = setInterval(() => {
     try {
@@ -201,6 +202,13 @@ async function main() {
       const now = Date.now();
       if (now - lastFrameAt >= FRAME_INTERVAL_MS) {
         lastFrameAt = now;
+        frameCount++;
+        // For unknown builds the boot-time dimension probe can land on a
+        // degenerate frame (screen-melt wipe). Re-validate on a couple of
+        // early frames; known builds skip this entirely.
+        if (!engine.dimensionsKnown && (frameCount === 3 || frameCount === 6)) {
+          try { engine.redetectDimensions(); } catch { /* keep current dims */ }
+        }
         // Self-defense: if our socket file vanished or was replaced (inode
         // changed), another daemon usurped the singleton — yield quietly and
         // leave all files to the new owner.
