@@ -364,7 +364,10 @@ async function main() {
       frameAge = Date.now() - frameStat.mtimeMs;
     } catch { /* frame absent */ }
 
-    if (frameAge < 5000) {
+    // 12s window: a daemon self-recycle takes ~3-5s (exit + statusline respawn
+    // + engine boot). Serving the last frame through that gap freezes the game
+    // for a beat instead of flashing the fire fallback.
+    if (frameAge < 12000) {
       // Daemon is alive and fresh — use its frame.
       // For pixel style, attempt out-of-band PNG transmission + placeholder text.
       const doomFramePng = path.join(doomDir, 'frame.png');
