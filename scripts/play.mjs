@@ -37,6 +37,8 @@
 
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -255,6 +257,24 @@ async function main() {
       'play.mjs: terminal does not support iTerm2 or Kitty graphics — using half-block rendering\n',
     );
   }
+
+  // Persist the resolved graphics decision so tooling (and the orchestrating
+  // assistant) can read what the probe concluded on this terminal.
+  try {
+    const decisionDir = path.join(os.tmpdir(), 'afk-arcade');
+    fs.mkdirSync(decisionDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(decisionDir, 'gfx-decision.json'),
+      JSON.stringify({
+        mode: gfxProtocol ?? 'text-quad',
+        label: gfxLabel,
+        termProgram: process.env.TERM_PROGRAM ?? null,
+        term: process.env.TERM ?? null,
+        at: new Date().toISOString(),
+      }),
+      'utf8',
+    );
+  } catch { /* non-fatal */ }
 
   // Enter alternate screen, hide cursor, enable raw mode
   process.stdout.write('\x1b[?1049h\x1b[?25l');

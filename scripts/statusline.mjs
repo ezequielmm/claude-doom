@@ -226,8 +226,8 @@ async function main() {
 
   // 4. Terminal dimensions
   const cols = parseInt(process.env.COLUMNS, 10) || 80;
-  const width = clamp(cols, 20, 220);
-  const rows = clamp(config.rows, 2, 30);
+  const width = clamp(cols, 20, 280);
+  const rows = clamp(config.rows, 2, 40);
   const pixH = rows * 2; // pixel height (2px per terminal row)
 
   // 5. Session state → fire intensity

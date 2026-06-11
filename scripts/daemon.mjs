@@ -142,8 +142,8 @@ function readViewport() {
     }
     const raw = fs.readFileSync(VIEWPORT, 'utf8');
     const obj = JSON.parse(raw);
-    const cols    = typeof obj.cols     === 'number' ? Math.max(20, Math.min(220, obj.cols))     : DEFAULT_VIEWPORT.cols;
-    const pxRows  = typeof obj.pxRows   === 'number' ? Math.max(4,  Math.min(60,  obj.pxRows))   : DEFAULT_VIEWPORT.pxRows;
+    const cols    = typeof obj.cols     === 'number' ? Math.max(20, Math.min(280, obj.cols))     : DEFAULT_VIEWPORT.cols;
+    const pxRows  = typeof obj.pxRows   === 'number' ? Math.max(4,  Math.min(80,  obj.pxRows))   : DEFAULT_VIEWPORT.pxRows;
     const truecolor = typeof obj.truecolor === 'boolean' ? obj.truecolor : DEFAULT_VIEWPORT.truecolor;
     return { cols, pxRows, truecolor, stale: false };
   } catch {
@@ -188,7 +188,10 @@ async function main() {
   const TICK_INTERVAL_MS = 30;
 
   // Frame write interval (~1000ms)
-  const FRAME_INTERVAL_MS = 1000;
+  // 4 frames/s: the statusline polls ~1/s out of phase with our writes, so a
+  // 1s write interval served frames up to ~2s stale. Writing at 250ms keeps
+  // every poll fresh (≤250ms old) for a consistent perceived cadence.
+  const FRAME_INTERVAL_MS = 250;
 
   let lastFrameAt = 0;
   let tickCount = 0;
