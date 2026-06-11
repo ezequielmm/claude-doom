@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License" /></a>
-  <img src="https://img.shields.io/badge/version-0.4.0-informational" alt="version 0.4.0" />
+  <img src="https://img.shields.io/badge/version-0.4.1-informational" alt="version 0.4.1" />
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen" alt="Node >= 20" />
   <img src="https://img.shields.io/badge/dependencies-zero-success" alt="Zero dependencies" />
   <img src="https://img.shields.io/badge/Claude%20Code-%3E%3D2.1.153-blueviolet" alt="Claude Code >= 2.1.153" />
@@ -286,6 +286,24 @@ node scripts/fetch-doom.mjs
 
 **Assets missing / fetch fails**
 `fetch-doom.mjs` downloads from the `opentui-doom` npm package registry (no npm install — it uses the CDN tarball directly). Check your network connection and retry.
+
+**Pixel mode looks wrong, slow, or shows artifacts**
+Enable the diagnostic log to see exactly what happened on each statusline invocation:
+```sh
+/afk debug on
+```
+Wait a few seconds for the statusline to tick, then inspect the log:
+```sh
+/afk debug tail 10
+```
+Each line is a JSON object. For pixel renders look at `pixel.fellBack` (why it fell back to quad), `pixel.tty` (whether `/dev/tty` opened), `pixel.png.ageMs` (how stale the daemon frame was), and `pixel.tx.ms` (transmission time). You can also enable without touching config:
+```sh
+AFK_ARCADE_DEBUG=1 bash ~/.claude/afk-arcade/statusline.sh
+```
+The log rotates automatically at 500 KB (`debug.log` → `debug.log.1`). Disable when done:
+```sh
+/afk debug off
+```
 
 **Run the test suite**
 ```sh

@@ -21,6 +21,7 @@ import {
   SESSION_DIR,
   readJson,
 } from '../lib/state.mjs';
+import { DEBUG_LOG } from '../lib/debug.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -174,6 +175,59 @@ switch (cmd) {
     break;
   }
 
+  case 'debug': {
+    const sub = args[1];
+
+    if (sub === 'on') {
+      writeConfig({ debug: true });
+      process.stdout.write('afk-arcade: debug logging enabled — logs go to ' + DEBUG_LOG + '\n');
+      process.stdout.write('  Disable with:  /afk debug off\n');
+      process.stdout.write('  Tail with:     /afk debug tail\n');
+      process.stdout.write('  Or set env:    AFK_ARCADE_DEBUG=1\n');
+      break;
+    }
+
+    if (sub === 'off') {
+      writeConfig({ debug: false });
+      process.stdout.write('afk-arcade: debug logging disabled\n');
+      break;
+    }
+
+    if (sub === 'tail' || sub === undefined) {
+      const n = sub === 'tail' && args[2] ? parseInt(args[2], 10) : 30;
+      const lineCount = isNaN(n) || n < 1 ? 30 : n;
+
+      let raw;
+      try {
+        raw = fs.readFileSync(DEBUG_LOG, 'utf8');
+      } catch {
+        process.stdout.write('(no debug log yet — enable with: /afk debug on)\n');
+        break;
+      }
+
+      const allLines = raw.split('\n').filter(l => l.length > 0);
+      if (allLines.length === 0) {
+        process.stdout.write('(debug log is empty)\n');
+        break;
+      }
+
+      const tail = allLines.slice(-lineCount);
+      process.stdout.write(tail.join('\n') + '\n');
+      break;
+    }
+
+    // Unknown sub-command
+    process.stdout.write([
+      'afk-arcade debug commands:',
+      '  debug on           — enable JSONL debug logging to ' + DEBUG_LOG,
+      '  debug off          — disable debug logging',
+      '  debug tail [n]     — print last n lines from debug.log (default: 30)',
+      '',
+      'Or set env:  AFK_ARCADE_DEBUG=1  (enables without touching config)',
+    ].join('\n') + '\n');
+    break;
+  }
+
   case 'play': {
     const playScript = path.join(ROOT, 'scripts', 'play.mjs');
     const CONTROLS = 'Controls: WASD/arrows move \xB7 SPACE use \xB7 F fire \xB7 1-7 weapons \xB7 ESC menu \xB7 Q quit';
@@ -269,6 +323,9 @@ switch (cmd) {
       '  style <quad|half|pixel>',
       '                       — set render style: quad (2×2 blocks, default), half (▀ classic),',
       '                         or pixel (EXPERIMENTAL kitty Unicode placeholder banner)',
+      '  debug on             — enable JSONL diagnostics (written to ~/.claude/afk-arcade/debug.log)',
+      '  debug off            — disable diagnostics',
+      '  debug tail [n]       — print last n lines from debug.log (default: 30)',
       '  fetch-doom           — download DOOM WASM assets into vendor/doom/',
       '  play                 — print the command to play DOOM in a fresh terminal',
       '  setup [--yes] [--no-iterm]',

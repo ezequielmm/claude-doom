@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.4.1] — 2026-06-11
+
+### Added
+- **Deep diagnostics** — JSONL structured debug log at `~/.claude/afk-arcade/debug.log`.
+  - `lib/debug.mjs`: `debugEnabled(config)` (checks `config.debug === true` or `AFK_ARCADE_DEBUG=1`); `dbgLog(component, fields)` appends one JSON line per call. Rotates at 500 KB: current file renamed to `debug.log.1` (overwrites previous `.1`) before each new line. Never throws.
+  - `scripts/statusline.mjs` instrumented: one `dbgLog('statusline', diag)` call per invocation (success and error paths). Captures `sid`, `style`, `game`, `rows`, `cols`, `env` (raw `TERM_PROGRAM`, `TERM`, `COLORTERM`, `COLUMNS×LINES`), `mode`, `tMs` (total runtime), `out` (kind, lines, bytes, 80-char sample of second output line). When `style=pixel`: nested `pixel` object with `tty` (ok or `err:<msg>`), `png` (age + bytes or `'missing'`), `tx` (sent/skipped, bytes, chunks, ms), `fellBack` (exact reason string).
+  - `scripts/daemon.mjs` instrumented: `dbgLog('daemon', {...})` on frames 1, 2, 3, then every 20th. Fields: `frame`, `style`, `engineDims`, `viewport`, `gameW`, `tScaleMs`, `tRenderMs`, `ansBytes`; `tPngMs` and `pngBytes` added when `style=pixel`.
+  - `/afk debug on` / `debug off` — write `{ debug: true|false }` to config + confirmation message.
+  - `/afk debug tail [n]` — print last `n` lines (default 30) from `debug.log` raw (JSONL).
+  - `/afk` help text updated with the three `debug` sub-commands.
+- `test/debug.test.mjs` — 4 new tests: (1) `dbgLog` writes parseable JSONL with `ts` and `c`; (2) rotation triggers when file > 500 KB; (3) statusline with `AFK_ARCADE_DEBUG=1` produces a log line whose `out.kind` is a known value and `env.sz` reflects `COLUMNS`; (4) debug off (no env, no `config.debug`) — no log file created. Wired into `test/run.mjs` as Phase E.
+
+---
+
 ## [0.4.0] — 2026-06-11
 
 ### Added

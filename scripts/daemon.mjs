@@ -19,6 +19,7 @@ import { readConfig, TMP_ROOT } from '../lib/state.mjs';
 import { computeGameWidth, buildScaledBuffer, bufferGetPixel } from '../lib/scale.mjs';
 import { sharpen, toneLift } from '../lib/postfx.mjs';
 import { encodePngFast } from '../lib/png.mjs';
+import { debugEnabled, dbgLog } from '../lib/debug.mjs';
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -200,6 +201,9 @@ async function main() {
   let tickCount = 0;
   let frameCount = 0;
 
+  // Read config once for debug gating (re-read inside writeFrame for style)
+  const _initCfg = readConfig();
+
   const tickTimer = setInterval(() => {
     try {
       engine.tick();
@@ -226,7 +230,7 @@ async function main() {
             process.exit(0);
           }
         }
-        writeFrame(engine);
+        writeFrame(engine, frameCount);
       }
     } catch {
       // Engine error — stop ticking but keep process alive for pidfile cleanup
@@ -278,8 +282,9 @@ async function main() {
  *   - no trailing spaces needed; the reset at end of each game line suffices
  *
  * @param {{ getPixel: Function, width: number, height: number }} engine
+ * @param {number} frameCount  Current frame counter (for diagnostic sampling).
  */
-function writeFrame(engine) {
+function writeFrame(engine, frameCount) {
   try {
     const vp     = readViewport();
     const cfg    = readConfig();
@@ -292,6 +297,16 @@ function writeFrame(engine) {
     const leftPad = Math.floor((cols - gameW) / 2);
     const pad     = leftPad > 0 ? ' '.repeat(leftPad) : '';
 
+    // Diagnostic sampling: frames 1, 2, 3, then every 20th
+    const shouldLog = debugEnabled(cfg) &&
+      (frameCount <= 3 || frameCount % 20 === 0);
+
+    let tScaleMs = null;
+    let tRenderMs = null;
+    let tPngMs = null;
+    let ansBytes = null;
+    let pngBytes = null;
+
     // ── Pixel style: write frame.png (half-res 2×2 box downscale) ────────────
     // Also always write frame.ans (quad) as the universal fallback.
     if (style === 'pixel') {
@@ -299,10 +314,13 @@ function writeFrame(engine) {
       // Clamp to at most the game content dimensions.
       const halfW = Math.min(640, gameW * 4);
       const halfH = Math.min(400, pxRows * 4);
-      const rgb = buildScaledBuffer(engine.getPixel, engine.width, engine.height, halfW, halfH);
-      // No sharpen/toneLift for the PNG path — the terminal renders raw pixels.
       try {
+        const tPng0 = Date.now();
+        const rgb = buildScaledBuffer(engine.getPixel, engine.width, engine.height, halfW, halfH);
+        // No sharpen/toneLift for the PNG path — the terminal renders raw pixels.
         const pngBuf = encodePngFast(rgb, halfW, halfH);
+        tPngMs = Date.now() - tPng0;
+        pngBytes = pngBuf.length;
         const tmp = FRAME_PNG + '.tmp';
         fs.writeFileSync(tmp, pngBuf);
         fs.renameSync(tmp, FRAME_PNG);
@@ -317,26 +335,55 @@ function writeFrame(engine) {
       // Quad path: sample at double horizontal resolution so each cell covers 2×2 px
       const dstW = gameW * 2;
       const dstH = pxRows;
+      const t0Scale = Date.now();
       const scaledBuf = buildScaledBuffer(engine.getPixel, engine.width, engine.height, dstW, dstH);
       sharpen(scaledBuf, dstW, dstH);
       toneLift(scaledBuf);
+      tScaleMs = Date.now() - t0Scale;
       const scaledGetPixel = bufferGetPixel(scaledBuf, dstW);
       // renderQuadrants expects pxW = dstW (cells = dstW/2 = gameW), pxH = dstH
+      const t0Render = Date.now();
       gameLines = renderQuadrants(scaledGetPixel, dstW, dstH, { truecolor: vp.truecolor });
+      tRenderMs = Date.now() - t0Render;
     } else {
       // Half-block path: classic gameW × pxRows sampling, with post-fx for free
+      const t0Scale = Date.now();
       const scaledBuf = buildScaledBuffer(engine.getPixel, engine.width, engine.height, gameW, pxRows);
       sharpen(scaledBuf, gameW, pxRows);
       toneLift(scaledBuf);
+      tScaleMs = Date.now() - t0Scale;
       const scaledGetPixel = bufferGetPixel(scaledBuf, gameW);
+      const t0Render = Date.now();
       gameLines = renderHalfBlocks(scaledGetPixel, gameW, pxRows, { truecolor: vp.truecolor });
+      tRenderMs = Date.now() - t0Render;
     }
 
     // Prepend pillarbox padding (plain spaces, no color codes — gutters inherit terminal bg)
     const RESET = '\x1b[0m';
     const lines = gameLines.map(line => `${RESET}${pad}${line}`);
+    const ansContent = lines.join('\n');
+    ansBytes = Buffer.byteLength(ansContent, 'utf8');
 
-    writeAtomic(FRAME_ANS, lines.join('\n'));
+    writeAtomic(FRAME_ANS, ansContent);
+
+    // Emit diagnostic log for sampled frames
+    if (shouldLog) {
+      const logEntry = {
+        frame:      frameCount,
+        style,
+        engineDims: [engine.width, engine.height],
+        viewport:   { cols, pxRows },
+        gameW,
+        tScaleMs,
+        tRenderMs,
+        ansBytes,
+      };
+      if (style === 'pixel') {
+        logEntry.tPngMs  = tPngMs;
+        logEntry.pngBytes = pngBytes;
+      }
+      dbgLog('daemon', logEntry);
+    }
   } catch {
     // Non-fatal — next tick will retry
   }

@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { runDoomTests } from './doom.test.mjs';
 import { runPlayTests } from './play.test.mjs';
 import { runRenderTests } from './render.test.mjs';
+import { runDebugTests } from './debug.test.mjs';
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -352,6 +353,13 @@ const renderCounters = { passed: { value: passed }, failed: { value: failed } };
 await runRenderTests(renderCounters, { test });
 passed = renderCounters.passed.value;
 failed = renderCounters.failed.value;
+
+// ── Phase E: diagnostics / debug module tests ─────────────────────────────────
+
+const debugCounters = { passed: { value: passed }, failed: { value: failed } };
+await runDebugTests(debugCounters, { test });
+passed = debugCounters.passed.value;
+failed = debugCounters.failed.value;
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 

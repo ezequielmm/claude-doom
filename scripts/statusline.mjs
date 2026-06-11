@@ -17,6 +17,7 @@ import { readConfig, resolveSessionState, TMP_ROOT } from '../lib/state.mjs';
 import { createFire, stepFire, heatToRgb, saveFire, loadFire } from '../lib/fire.mjs';
 import { renderHalfBlocks, renderQuadrants } from '../lib/render.mjs';
 import { kittyVirtualImage, kittyPlaceholderLines } from '../lib/gfx-protocol.mjs';
+import { debugEnabled, dbgLog } from '../lib/debug.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -207,6 +208,26 @@ function loadStepSaveFire(fireFile, w, h, intensity) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
+  const t0 = Date.now();
+
+  // Diagnostic accumulator — filled throughout main(), flushed at exit.
+  const diag = {
+    sid: null,
+    style: null,
+    game: null,
+    rows: null,
+    cols: null,
+    env: {
+      tp:   process.env.TERM_PROGRAM ?? null,
+      term: process.env.TERM ?? null,
+      ct:   process.env.COLORTERM ?? null,
+      sz:   `${process.env.COLUMNS ?? '?'}x${process.env.LINES ?? '?'}`,
+    },
+    mode: null,
+    out:  null,
+    tMs:  null,
+  };
+
   // 1. Read stdin (race with 150ms timeout)
   const raw = await readStdinWithTimeout(150);
 
@@ -220,7 +241,14 @@ async function main() {
 
   // 3. Load config
   const config = readConfig();
+  const dbgOn  = debugEnabled(config);
+
   if (config.enabled === false) {
+    if (dbgOn) {
+      diag.tMs = Date.now() - t0;
+      diag.out  = { kind: 'empty', lines: 0, bytes: 0, sample: null };
+      dbgLog('statusline', diag);
+    }
     // Print nothing
     process.exit(0);
   }
@@ -231,9 +259,16 @@ async function main() {
   const rows = clamp(config.rows, 2, 40);
   const pixH = rows * 2; // pixel height (2px per terminal row)
 
+  diag.sid   = json.session_id ?? null;
+  diag.style = config.style ?? 'quad';
+  diag.game  = config.game  ?? 'fire';
+  diag.rows  = rows;
+  diag.cols  = width;
+
   // 5. Session state → fire intensity
   const sessionId = json.session_id;
   const state = resolveSessionState(sessionId);
+  diag.mode = state.mode;
 
   const intensityMap = { working: 1.0, afk: 0.85, idle: 0.25 };
   const intensity = intensityMap[state.mode] ?? 0.25;
@@ -247,6 +282,24 @@ async function main() {
   const fireFileId = sessionId ?? 'global';
   const fireFile = path.join(FIRE_SESSION_DIR, `${fireFileId}.fire`);
   const fire = loadStepSaveFire(fireFile, fireW, pixH, intensity);
+
+  // Helper: flush diag and exit cleanly.
+  // `outputStr` is what we already wrote to stdout.
+  const exitWithDiag = (outputStr, kind) => {
+    if (dbgOn) {
+      const outputLines = outputStr.split('\n').filter(l => l.length > 0);
+      const secondLine  = outputLines[1] ?? '';
+      diag.out = {
+        kind,
+        lines: outputLines.length,
+        bytes: Buffer.byteLength(outputStr, 'utf8'),
+        sample: JSON.stringify(secondLine.slice(0, 80)),
+      };
+      diag.tMs = Date.now() - t0;
+      dbgLog('statusline', diag);
+    }
+    process.exit(0);
+  };
 
   // 7. Phase B contract: DOOM daemon frame handling
   let extraSuffix;
@@ -269,8 +322,10 @@ async function main() {
 
     // Check for a fresh daemon frame (< 5s old)
     let frameAge = Infinity;
+    let frameStat = null;
     try {
-      frameAge = Date.now() - fs.statSync(doomFrame).mtimeMs;
+      frameStat = fs.statSync(doomFrame);
+      frameAge = Date.now() - frameStat.mtimeMs;
     } catch { /* frame absent */ }
 
     if (frameAge < 5000) {
@@ -291,61 +346,108 @@ async function main() {
         // placeholder-text regeneration cheap on every statusline poll (~1/s).
         //
         // Escape hatch: AFK_ARCADE_NO_PIXEL=1 hard-disables; `/afk style quad` reverts.
+
+        // Init pixel diag sub-object
+        diag.pixel = {
+          tty: null,
+          png: null,
+          tx:  null,
+          fellBack: null,
+        };
+
         let pixelOk = false;
         try {
-          const pngStat = fs.statSync(doomFramePng);
-          if (Date.now() - pngStat.mtimeMs < 5000) {
-            // Try opening /dev/tty for writing (may fail in piped/CI contexts).
-            let ttyFd = -1;
-            try { ttyFd = fs.openSync('/dev/tty', 'w'); } catch { /* tty unavailable */ }
+          let pngStat = null;
+          try {
+            pngStat = fs.statSync(doomFramePng);
+          } catch {
+            diag.pixel.png = 'missing';
+            diag.pixel.fellBack = 'png-missing';
+          }
 
-            if (ttyFd >= 0) {
+          if (pngStat) {
+            const pngAgeMs = Date.now() - pngStat.mtimeMs;
+            if (pngAgeMs >= 5000) {
+              diag.pixel.png = { ageMs: pngAgeMs, bytes: pngStat.size };
+              diag.pixel.fellBack = `png-stale-${pngAgeMs}ms`;
+            } else {
+              diag.pixel.png = { ageMs: pngAgeMs, bytes: pngStat.size };
+
+              // Try opening /dev/tty for writing (may fail in piped/CI contexts).
+              let ttyFd = -1;
               try {
-                // Compute game dimensions (same math as daemon.mjs / quad path).
-                const { computeGameWidth: cgw } = await import('../lib/scale.mjs');
-                const pixelAspect = config.aspect ?? '4:3';
-                const gameW       = cgw(pixelAspect, rows * 2, width);
-                const leftPad     = Math.floor((width - gameW) / 2);
+                ttyFd = fs.openSync('/dev/tty', 'w');
+                diag.pixel.tty = 'ok';
+              } catch (ttyErr) {
+                diag.pixel.tty = `err:${ttyErr.message}`;
+                diag.pixel.fellBack = 'tty-open-failed';
+              }
 
-                // Re-transmit only when the PNG file has changed since last time.
-                const txJsonPath = path.join(TMP_ROOT, 'pixel-tx.json');
-                const txState    = (() => { try { return JSON.parse(fs.readFileSync(txJsonPath, 'utf8')); } catch { return {}; } })();
+              if (ttyFd >= 0) {
+                try {
+                  // Compute game dimensions (same math as daemon.mjs / quad path).
+                  const { computeGameWidth: cgw } = await import('../lib/scale.mjs');
+                  const pixelAspect = config.aspect ?? '4:3';
+                  const gameW       = cgw(pixelAspect, rows * 2, width);
+                  const leftPad     = Math.floor((width - gameW) / 2);
 
-                if (pngStat.mtimeMs !== (txState.lastMtime ?? 0)) {
-                  const pngBuf = fs.readFileSync(doomFramePng);
-                  const txStr  = kittyVirtualImage(pngBuf, { imageId: 42, cols: gameW, rows });
-                  fs.writeSync(ttyFd, txStr);
+                  // Re-transmit only when the PNG file has changed since last time.
+                  const txJsonPath = path.join(TMP_ROOT, 'pixel-tx.json');
+                  const txState    = (() => { try { return JSON.parse(fs.readFileSync(txJsonPath, 'utf8')); } catch { return {}; } })();
 
-                  // Persist bookkeeping (non-fatal if write fails).
-                  try {
-                    const txTmp = txJsonPath + '.tmp';
-                    fs.writeFileSync(txTmp, JSON.stringify({
-                      lastMtime: pngStat.mtimeMs,
-                      attempts: (txState.attempts ?? 0) + 1,
-                      since:    txState.since ?? Date.now(),
-                    }), 'utf8');
-                    fs.renameSync(txTmp, txJsonPath);
-                  } catch { /* non-fatal */ }
+                  if (pngStat.mtimeMs !== (txState.lastMtime ?? 0)) {
+                    const pngBuf  = fs.readFileSync(doomFramePng);
+                    const txStr   = kittyVirtualImage(pngBuf, { imageId: 42, cols: gameW, rows });
+                    const tTxStart = Date.now();
+                    fs.writeSync(ttyFd, txStr);
+                    const tTxMs = Date.now() - tTxStart;
+
+                    diag.pixel.tx = {
+                      sent:   true,
+                      bytes:  Buffer.byteLength(txStr, 'utf8'),
+                      chunks: (txStr.match(/\x1b_G/g) ?? []).length,
+                      ms:     tTxMs,
+                    };
+
+                    // Persist bookkeeping (non-fatal if write fails).
+                    try {
+                      const txTmp = txJsonPath + '.tmp';
+                      fs.writeFileSync(txTmp, JSON.stringify({
+                        lastMtime: pngStat.mtimeMs,
+                        attempts: (txState.attempts ?? 0) + 1,
+                        since:    txState.since ?? Date.now(),
+                      }), 'utf8');
+                      fs.renameSync(txTmp, txJsonPath);
+                    } catch { /* non-fatal */ }
+                  } else {
+                    diag.pixel.tx = { sent: false, skip: 'mtime-unchanged' };
+                  }
+
+                  fs.closeSync(ttyFd);
+
+                  // Emit placeholder text to stdout (flows through Claude Code renderer).
+                  const hudLine = buildHudLine({
+                    state, modelObj: json.model, ctxObj: json.context_window,
+                    width, extraSuffix: 'pixel',
+                  });
+                  const phLines = kittyPlaceholderLines({ imageId: 42, cols: gameW, rows, leftPad });
+                  const pixelOut = hudLine + '\n' + phLines.join('\n') + '\n';
+                  process.stdout.write(pixelOut);
+                  pixelOk = true;
+
+                  exitWithDiag(pixelOut, 'pixel');
+                } catch (innerErr) {
+                  if (diag.pixel.fellBack == null) diag.pixel.fellBack = `tx-error:${innerErr.message}`;
+                  try { fs.closeSync(ttyFd); } catch { /* ignore */ }
                 }
-
-                fs.closeSync(ttyFd);
-
-                // Emit placeholder text to stdout (flows through Claude Code renderer).
-                const hudLine = buildHudLine({
-                  state, modelObj: json.model, ctxObj: json.context_window,
-                  width, extraSuffix: 'pixel',
-                });
-                const phLines = kittyPlaceholderLines({ imageId: 42, cols: gameW, rows, leftPad });
-                process.stdout.write(hudLine + '\n' + phLines.join('\n') + '\n');
-                pixelOk = true;
-              } catch {
-                try { fs.closeSync(ttyFd); } catch { /* ignore */ }
               }
             }
           }
-        } catch { /* stat failed or other error — fall through to quad frame.ans */ }
+        } catch (pixelErr) {
+          if (diag.pixel.fellBack == null) diag.pixel.fellBack = `outer-error:${pixelErr.message}`;
+        }
 
-        if (pixelOk) process.exit(0);
+        if (pixelOk) return; // exitWithDiag already called
         // Fall through to quad frame.ans below.
       }
 
@@ -359,8 +461,10 @@ async function main() {
           extraSuffix: undefined,
         });
         const frameContent = fs.readFileSync(doomFrame, 'utf8');
-        process.stdout.write(hudLine + '\n' + frameContent + '\n');
-        process.exit(0);
+        const doomOut = hudLine + '\n' + frameContent + '\n';
+        process.stdout.write(doomOut);
+        exitWithDiag(doomOut, 'doom-frame');
+        return;
       } catch { /* fall through to fire */ }
     }
 
@@ -430,16 +534,32 @@ async function main() {
     return heatToRgb(fire.heat[idx]);
   };
   // Pixel style falls back to quad rendering for the fire (no DOOM frame available).
-  const lines = (style === 'quad' || style === 'pixel')
+  const fireLines = (style === 'quad' || style === 'pixel')
     ? renderQuadrants(heatGetPixel, fireW, pixH, { truecolor })
     : renderHalfBlocks(heatGetPixel, width, pixH, { truecolor });
 
+  // Determine output kind
+  const outputKind = style === 'pixel' ? 'quad' // pixel without doom falls back to quad fire
+    : style === 'quad' ? 'quad'
+    : 'half';
+
   // 10. Output: HUD line first, then fire rows
-  const output = [hudLine, ...lines].join('\n');
-  process.stdout.write(output + '\n');
+  const output = [hudLine, ...fireLines].join('\n') + '\n';
+  process.stdout.write(output);
+  exitWithDiag(output, outputKind);
 }
 
-main().catch(() => {
+main().catch((err) => {
+  // Best-effort diagnostic on the error path — AFK_ARCADE_DEBUG env is enough to gate it.
+  if (process.env.AFK_ARCADE_DEBUG === '1') {
+    try {
+      dbgLog('statusline', {
+        err:   err?.message ?? String(err),
+        stack: err?.stack?.split('\n')[1]?.trim() ?? null,
+        tMs:   null,
+      });
+    } catch { /* truly last resort */ }
+  }
   process.stdout.write('afk-arcade ⚠\n');
   process.exit(0);
 });

@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="../../LICENSE"><img src="https://img.shields.io/badge/licencia-MIT-blue.svg" alt="Licencia MIT" /></a>
-  <img src="https://img.shields.io/badge/versión-0.4.0-informational" alt="versión 0.4.0" />
+  <img src="https://img.shields.io/badge/versión-0.4.1-informational" alt="versión 0.4.1" />
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen" alt="Node >= 20" />
   <img src="https://img.shields.io/badge/dependencias-cero-success" alt="Cero dependencias" />
   <img src="https://img.shields.io/badge/Claude%20Code-%3E%3D2.1.153-blueviolet" alt="Claude Code >= 2.1.153" />
@@ -242,6 +242,9 @@ AFK_ARCADE_NO_PIXEL=1 # en tu entorno
 | `/afk rows <N>` | Altura del banner, 2–30 filas |
 | `/afk aspect <4:3\|16:10\|stretch>` | Relación de aspecto del frame (predeterminado: `4:3`) |
 | `/afk style <quad\|half\|pixel>` | Estilo del renderer: `quad` (predeterminado), `half` (clásico `▀`), o `pixel` (experimental) |
+| `/afk debug on` | Activar log de diagnósticos JSONL en `~/.claude/afk-arcade/debug.log` |
+| `/afk debug off` | Desactivar diagnósticos |
+| `/afk debug tail [n]` | Imprimir las últimas `n` líneas del log (predeterminado: 30) |
 | `/afk play` | Lanzar DOOM en una pestaña Warp (macOS + Warp instalado); si no, imprimir el comando |
 | `/afk fetch-doom` | Descargar los assets DOOM WASM en `vendor/` |
 | `/afk setup [--yes] [--no-iterm]` | Instalador guiado — conecta statusline, descarga assets, ofrece iTerm2 |
@@ -286,6 +289,24 @@ node scripts/fetch-doom.mjs
 
 **Assets faltantes / descarga falla**
 `fetch-doom.mjs` descarga desde el registro npm de `opentui-doom` (sin npm install — usa el tarball CDN directamente). Verifica tu conexión de red y reintenta.
+
+**El modo pixel se ve mal, es lento o muestra artefactos**
+Activa el log de diagnósticos para ver exactamente qué ocurrió en cada invocación del statusline:
+```sh
+/afk debug on
+```
+Esperá unos segundos a que el statusline haga un ciclo y luego inspeccioná el log:
+```sh
+/afk debug tail 10
+```
+Cada línea es un objeto JSON. Para renders en pixel mirá `pixel.fellBack` (por qué cayó a quad), `pixel.tty` (si `/dev/tty` se abrió), `pixel.png.ageMs` (qué tan antiguo era el frame del daemon) y `pixel.tx.ms` (tiempo de transmisión). También podés activarlo sin tocar la config:
+```sh
+AFK_ARCADE_DEBUG=1 bash ~/.claude/afk-arcade/statusline.sh
+```
+El log rota automáticamente a los 500 KB (`debug.log` → `debug.log.1`). Desactivá cuando termines:
+```sh
+/afk debug off
+```
 
 **Ejecutar el conjunto de pruebas**
 ```sh
