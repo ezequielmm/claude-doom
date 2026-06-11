@@ -202,8 +202,12 @@ Switch styles at any time:
 
 ### Requirements
 
-- Terminal with kitty graphics protocol **and** Unicode placeholder (U=1) support.
-  Confirmed working or planned: **Warp**, **kitty**, **WezTerm**, **Ghostty**.
+- Terminal with kitty graphics protocol **and** Unicode placeholder (U=1) support:
+  **kitty**, **WezTerm**, **Ghostty**.
+- **Warp (verified 2026-06)**: speaks core kitty graphics — fullscreen pixel play works at
+  full speed — but does **not** yet implement U=1 placeholders, so the pixel banner renders
+  as green placeholder glyphs there. Use `style quad` in Warp. Notably, Claude Code passes
+  the placeholder text through faithfully, so this feature lights up the moment Warp ships U=1.
 - DOOM mode must be active (`/afk game doom`).
 
 ### How it works
