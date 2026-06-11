@@ -55,6 +55,47 @@ Restart Claude Code. The `SessionStart` hook writes `statusline.sh` automaticall
 /afk rows <N>      — banner height, 2–12 rows
 ```
 
-## Roadmap
+## Phase B — DOOM WASM daemon
 
-**Phase B — DOOM WASM daemon**: a sidecar process renders actual DOOM gameplay frames as ANSI art and writes them to `/tmp/afk-arcade/doom/frame.ans`. The statusline polls that file (< 5s old = daemon alive) and renders it verbatim. File contract is already wired in `statusline.mjs`.
+Real DOOM (doomgeneric compiled to WebAssembly) runs in a detached sidecar process, rendering the attract/demo mode as ANSI half-block art in your statusline.
+
+### Setup
+
+```sh
+# 1. Fetch WASM engine + shareware WAD (~4 MB total, into vendor/ which is gitignored)
+node scripts/fetch-doom.mjs
+# or via the control CLI:
+/afk fetch-doom
+
+# 2. Switch the banner to DOOM mode
+/afk game doom
+```
+
+### How it works
+
+```
+statusline.mjs (every ~1 s)
+  │  writes /tmp/afk-arcade/doom/viewport.json  { cols, pxRows, truecolor }
+  │  reads  /tmp/afk-arcade/doom/frame.ans       (< 5s old = daemon alive)
+  │  if frame absent or stale + daemon dead → spawns daemon.mjs (detached, unref'd)
+  │  while daemon warms up → falls back to fire with "doom: warming up" HUD note
+  │
+daemon.mjs  (singleton, runs in background)
+  │  setInterval ~30ms → engine.tick()           (doomgeneric self-paces internally)
+  │  every ~1 s → reads viewport.json → nearest-neighbour scale 320×200 → cols×pxRows
+  │             → renderHalfBlocks → writes frame.ans atomically
+  │  watchdog: if viewport.json > 10 min old → exit gracefully
+  │  SIGTERM (from hook.mjs SessionEnd) → removes pidfile + exits
+```
+
+### Daemon lifecycle
+
+The daemon is **lazily spawned** the first time statusline.mjs runs with `game=doom` and no live frame. It is **automatically stopped** when `hook.mjs` receives a `SessionEnd` event and no other live sessions remain. A pidfile at `/tmp/afk-arcade/doom/daemon.pid` guards against double-spawning.
+
+### Switching back
+
+```sh
+/afk game fire
+```
+
+The daemon will exit on its own within 10 minutes (viewport watchdog), or immediately when the session ends.

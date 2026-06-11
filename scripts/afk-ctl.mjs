@@ -12,6 +12,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import {
   readConfig,
   writeConfig,
@@ -19,6 +21,10 @@ import {
   SESSION_DIR,
   readJson,
 } from '../lib/state.mjs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(__dirname, '..');
+const VENDOR_DOOM = path.join(ROOT, 'vendor', 'doom');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -86,8 +92,32 @@ switch (cmd) {
       process.stdout.write(`afk-arcade: unknown game "${game ?? ''}". Valid options: fire, doom\n`);
       process.exit(1);
     }
+    if (game === 'doom') {
+      // Verify vendor assets exist before switching
+      const vendorFiles = ['doom.js', 'doom.wasm', 'doom1.wad'];
+      const missing = vendorFiles.filter((f) => {
+        try { return fs.statSync(path.join(VENDOR_DOOM, f)).size < 1000; } catch { return true; }
+      });
+      if (missing.length > 0) {
+        process.stdout.write(
+          `afk-arcade: DOOM vendor assets missing: ${missing.join(', ')}\n` +
+          `  Run:  node ${path.join(ROOT, 'scripts', 'fetch-doom.mjs')}\n` +
+          `  Or:   /afk fetch-doom\n`,
+        );
+        process.exit(1);
+      }
+    }
     writeConfig({ game });
     printConfig({ ...cfg, game });
+    break;
+  }
+
+  case 'fetch-doom': {
+    const fetchScript = path.join(ROOT, 'scripts', 'fetch-doom.mjs');
+    const result = spawnSync(process.execPath, ['--no-warnings', fetchScript], {
+      stdio: 'inherit',
+    });
+    process.exit(result.status ?? 0);
     break;
   }
 
@@ -113,6 +143,7 @@ switch (cmd) {
       '  game fire      — switch to DOOM fire effect',
       '  game doom      — switch to DOOM WASM daemon frame (Phase B)',
       '  rows <N>       — set banner height (2..12 rows)',
+      '  fetch-doom     — download DOOM WASM assets into vendor/doom/',
     ].join('\n') + '\n');
     break;
   }

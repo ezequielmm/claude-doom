@@ -25,5 +25,16 @@ node "<pluginRoot>/scripts/afk-ctl.mjs" $ARGUMENTS
 - `/afk on` — enable the banner
 - `/afk off` — disable the banner
 - `/afk game fire` — switch to DOOM PSX fire effect
-- `/afk game doom` — switch to DOOM WASM daemon mode (requires Phase B daemon running)
+- `/afk game doom` — switch to DOOM WASM daemon mode (auto-spawns daemon on first use)
 - `/afk rows <N>` — set banner height (2–12 rows)
+- `/afk fetch-doom` — download DOOM WASM assets into vendor/doom/ (required before game doom)
+
+**Phase B first-time setup:**
+
+```
+/afk fetch-doom
+/afk game doom
+```
+
+The daemon starts automatically when the statusline first renders in doom mode.
+Switch back with `/afk game fire` — the daemon stops within 10 minutes.

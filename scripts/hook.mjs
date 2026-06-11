@@ -165,6 +165,54 @@ function handleSessionEnd(payload) {
   const sessionId = payload.session_id;
   if (sessionId) deleteSessionFiles(sessionId);
   pruneOldSessions();
+
+  // Phase B: if no other live sessions remain, terminate the DOOM daemon.
+  maybeTerminateDoomDaemon();
+}
+
+/**
+ * If there are no remaining live session state files, SIGTERM the DOOM daemon
+ * and clean up the doom tmp directory.
+ */
+function maybeTerminateDoomDaemon() {
+  try {
+    // Check whether any live session files remain (younger than 10 min)
+    const cutoff = Date.now() - 10 * 60 * 1000;
+    let anyLive = false;
+    try {
+      const files = fs.readdirSync(SESSION_DIR).filter(f => f.endsWith('.json'));
+      for (const f of files) {
+        const data = readJson(path.join(SESSION_DIR, f), null);
+        if (data && typeof data.updatedAt === 'number' && data.updatedAt > cutoff) {
+          anyLive = true;
+          break;
+        }
+      }
+    } catch { /* SESSION_DIR may not exist — treat as empty */ }
+
+    if (anyLive) return;
+
+    // No live sessions — terminate daemon if it exists
+    const doomDir = path.join(os.tmpdir(), 'afk-arcade', 'doom');
+    const pidFile = path.join(doomDir, 'daemon.pid');
+
+    let pid = 0;
+    try {
+      const raw = fs.readFileSync(pidFile, 'utf8').trim();
+      pid = parseInt(raw, 10);
+    } catch { return; /* no pidfile */ }
+
+    if (isNaN(pid) || pid <= 0) return;
+
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch { /* process already gone */ }
+
+    // Remove doom tmp dir files (daemon will also clean up on exit, belt+suspenders)
+    for (const name of ['frame.ans', 'viewport.json', 'daemon.pid', 'daemon.err']) {
+      try { fs.unlinkSync(path.join(doomDir, name)); } catch { /* ignore */ }
+    }
+  } catch { /* silent — hook must never throw */ }
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────

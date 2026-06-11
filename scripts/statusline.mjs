@@ -12,9 +12,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { readConfig, resolveSessionState } from '../lib/state.mjs';
 import { createFire, stepFire, heatToRgb, saveFire, loadFire } from '../lib/fire.mjs';
 import { renderHalfBlocks } from '../lib/render.mjs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -239,15 +243,34 @@ async function main() {
   const fireFile = path.join(FIRE_SESSION_DIR, `${fireFileId}.fire`);
   const fire = loadStepSaveFire(fireFile, width, pixH, intensity);
 
-  // 7. Phase B contract: check for DOOM daemon frame
+  // 7. Phase B contract: DOOM daemon frame handling
   let extraSuffix;
   if (config.game === 'doom') {
-    const doomFrame = path.join(os.tmpdir(), 'afk-arcade', 'doom', 'frame.ans');
+    const doomDir  = path.join(os.tmpdir(), 'afk-arcade', 'doom');
+    const doomFrame  = path.join(doomDir, 'frame.ans');
+    const viewportFile = path.join(doomDir, 'viewport.json');
+    const pidFile    = path.join(doomDir, 'daemon.pid');
+
+    // Always write the current viewport spec so the daemon knows our dimensions.
+    // Atomic write is fine (it's not critical path for correctness).
     try {
-      const stat = fs.statSync(doomFrame);
-      const age = Date.now() - stat.mtimeMs;
-      if (age < 5000) {
-        // Daemon is alive and fresh — use its frame
+      const truecolor = detectTruecolor();
+      const viewportObj = { cols: width, pxRows: rows * 2, truecolor };
+      const vTmp = viewportFile + '.tmp';
+      fs.mkdirSync(doomDir, { recursive: true });
+      fs.writeFileSync(vTmp, JSON.stringify(viewportObj), 'utf8');
+      fs.renameSync(vTmp, viewportFile);
+    } catch { /* non-fatal */ }
+
+    // Check for a fresh daemon frame (< 5s old)
+    let frameAge = Infinity;
+    try {
+      frameAge = Date.now() - fs.statSync(doomFrame).mtimeMs;
+    } catch { /* frame absent */ }
+
+    if (frameAge < 5000) {
+      // Daemon is alive and fresh — use its frame
+      try {
         const hudLine = buildHudLine({
           state,
           modelObj: json.model,
@@ -258,11 +281,55 @@ async function main() {
         const frameContent = fs.readFileSync(doomFrame, 'utf8');
         process.stdout.write(hudLine + '\n' + frameContent + '\n');
         process.exit(0);
-      }
-    } catch {
-      // Frame missing or too old — fall through to fire with daemon-offline note
+      } catch { /* fall through to fire */ }
     }
-    extraSuffix = 'doom: daemon offline';
+
+    // Frame is stale or absent — maybe daemon is dead; try to spawn it.
+    // Guard with a spawn-lock directory so concurrent statusline runs never
+    // double-spawn.
+    const lockDir = path.join(doomDir, 'spawn.lock');
+    let daemonIsAlive = false;
+    try {
+      const pidRaw = fs.readFileSync(pidFile, 'utf8').trim();
+      const pid = parseInt(pidRaw, 10);
+      if (!isNaN(pid)) {
+        try { process.kill(pid, 0); daemonIsAlive = true; } catch { /* stale pid */ }
+      }
+    } catch { /* pidfile absent */ }
+
+    if (!daemonIsAlive) {
+      // Attempt spawn lock (mkdir is atomic on POSIX)
+      let gotLock = false;
+      try {
+        // Check if lock is stale (> 30s)
+        try {
+          const lockStat = fs.statSync(lockDir);
+          if (Date.now() - lockStat.mtimeMs > 30_000) {
+            fs.rmdirSync(lockDir);
+          }
+        } catch { /* lock doesn't exist */ }
+
+        fs.mkdirSync(lockDir);
+        gotLock = true;
+      } catch { /* lock held by another concurrent run */ }
+
+      if (gotLock) {
+        try {
+          const daemonScript = path.join(__dirname, 'daemon.mjs');
+          const child = spawn(process.execPath, ['--no-warnings', daemonScript], {
+            detached: true,
+            stdio: 'ignore',
+          });
+          child.unref();
+        } catch { /* spawn failed — non-fatal */ }
+
+        // Remove lock after a moment (daemon will write pidfile before we're called again)
+        try { fs.rmdirSync(lockDir); } catch { /* ignore */ }
+      }
+    }
+
+    // While daemon is warming up (or offline), show fire with "doom: warming up"
+    extraSuffix = daemonIsAlive ? 'doom: warming up' : 'doom: warming up';
   }
 
   // 8. Build HUD line

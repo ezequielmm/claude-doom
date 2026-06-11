@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { runDoomTests } from './doom.test.mjs';
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -309,6 +310,14 @@ test('config off → empty output; on → output restored', () => {
 // ── Cleanup ───────────────────────────────────────────────────────────────────
 
 cleanupSession(TEST_SESSION);
+
+// ── Phase B: doom tests (async, skips cleanly if vendor assets absent) ────────
+
+// Wrap counters as boxed objects so runDoomTests can increment them
+const counters = { passed: { value: passed }, failed: { value: failed } };
+await runDoomTests(counters, { test });
+passed = counters.passed.value;
+failed = counters.failed.value;
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 
