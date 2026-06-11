@@ -73,26 +73,49 @@ function isProcessAlive(pid) {
 function checkSingleton() {
   mkdirp(DOOM_TMP);
 
-  // Claim the pidfile with an exclusive create BEFORE any heavy init, so two
-  // daemons racing through startup cannot both survive. If the holder is a
-  // live process, yield; if it is stale, clear it and retry the claim once.
+  // Claim the pidfile with an exclusive create BEFORE any heavy init. If the
+  // create fails, wait for any concurrent writer to finish before reading —
+  // reading mid-write yields an empty file, which must not be mistaken for a
+  // stale pidfile (that mistake lets two racers both "win").
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       fs.writeFileSync(PIDFILE, String(process.pid), { flag: 'wx' });
-      return;
+      break;
     } catch {
+      sleepMs(120);
       let existingPid = NaN;
       try {
         existingPid = parseInt(fs.readFileSync(PIDFILE, 'utf8').trim(), 10);
-      } catch { /* unreadable — treat as stale */ }
+      } catch { /* unreadable */ }
       if (!isNaN(existingPid) && existingPid !== process.pid && isProcessAlive(existingPid)) {
         process.exit(0);
       }
       removePidfile();
     }
   }
-  // Could not claim after clearing a stale pidfile — yield to the other racer.
-  process.exit(0);
+
+  // Settle, then verify undisputed ownership: the pidfile holds exactly one
+  // pid, so exactly one racer survives this check no matter the interleaving.
+  // If we lost (or the file vanished), exit — the statusline respawns within
+  // a second and the next claim is uncontested.
+  sleepMs(150);
+  let owner = NaN;
+  try {
+    owner = parseInt(fs.readFileSync(PIDFILE, 'utf8').trim(), 10);
+  } catch { /* missing — treat as lost */ }
+  if (owner !== process.pid) {
+    process.exit(0);
+  }
+}
+
+/**
+ * Synchronous sleep without a child process — Atomics.wait on a throwaway
+ * buffer. Fine here: the daemon has not started its tick loop yet.
+ * @param {number} ms
+ */
+function sleepMs(ms) {
+  const sab = new SharedArrayBuffer(4);
+  Atomics.wait(new Int32Array(sab), 0, 0, ms);
 }
 
 // ── Viewport ──────────────────────────────────────────────────────────────────
