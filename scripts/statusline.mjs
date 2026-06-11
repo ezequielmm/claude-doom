@@ -95,7 +95,7 @@ const SGR = {
  * @param {object|undefined} params.ctxObj
  * @param {number} params.width
  * @param {string|undefined} params.extraSuffix
- * @param {{ playing: boolean, aggressive: boolean }|null} [params.botStatus]
+ * @param {{ playing: boolean, aggressive: boolean, owner?: string }|null} [params.botStatus]
  * @returns {string}  ANSI-styled string, truncated to `width` visible chars.
  */
 function buildHudLine({ state, modelObj, ctxObj, width, extraSuffix, botStatus }) {
@@ -108,7 +108,12 @@ function buildHudLine({ state, modelObj, ctxObj, width, extraSuffix, botStatus }
   let statusPart;
   let statusColor;
 
-  if (state.attention) {
+  // User-controller HUD override: when the user has the wheel, show it
+  // regardless of Claude's session mode (attention/working/idle/afk).
+  if (botStatus?.playing && botStatus?.owner === 'user') {
+    statusColor = SGR.fgGrn;
+    statusPart = `${statusColor}you're driving 🎮${SGR.reset}`;
+  } else if (state.attention) {
     // Alternating bold on even seconds (blink-style without actual blink)
     const prefix = evenSecond ? `${SGR.bold}${SGR.fgYlw}` : `${SGR.fgYlw}`;
     statusPart = `${prefix}⚠ claude needs your input${SGR.reset}`;

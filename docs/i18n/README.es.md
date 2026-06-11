@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="../../LICENSE"><img src="https://img.shields.io/badge/licencia-MIT-blue.svg" alt="Licencia MIT" /></a>
-  <img src="https://img.shields.io/badge/versión-0.6.0-informational" alt="versión 0.6.0" />
+  <img src="https://img.shields.io/badge/versión-0.7.0-informational" alt="versión 0.7.0" />
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen" alt="Node >= 20" />
   <img src="https://img.shields.io/badge/dependencias-cero-success" alt="Cero dependencias" />
   <img src="https://img.shields.io/badge/Claude%20Code-%3E%3D2.1.153-blueviolet" alt="Claude Code >= 2.1.153" />
@@ -225,6 +225,47 @@ el banner está activo en modo daemon:
 /afk bot off   # desactivar (el engine vuelve al demo attract)
 ```
 
+## Tomá el volante
+
+`/afk control` abre una **pestaña de control lateral** en Warp (o imprime el comando
+para otras terminales) para que *vos* juegues DOOM mientras Claude piensa:
+
+```sh
+/afk control
+```
+
+La filosofía: **jugás mientras Claude piensa; el bot juega cuando volvés a escribir.**
+El cambio de dueño es automático:
+
+| Quién maneja | Cuándo |
+|---|---|
+| **Vos** | La pestaña controladora está abierta y el heartbeat es reciente (<1.5s) |
+| **Bot** | La pestaña se cerró, saliste con Q, o pasaron 1.5s sin heartbeat |
+
+El HUD muestra *"you're driving 🎮"* mientras el sidecar está conectado.
+
+Controles en la pestaña del controlador:
+
+| Tecla | Acción |
+|---|---|
+| `W` / `↑` | Avanzar (held) |
+| `S` / `↓` | Retroceder (held) |
+| `A` / `←` | Girar izquierda (held) |
+| `D` / `→` | Girar derecha (held) |
+| `Espacio` | Usar / abrir puerta (tap) |
+| `F` o `X` | Disparar (held) |
+| `1`–`7` | Seleccionar arma (tap) |
+| `Enter` | Confirmar menú (tap) |
+| `Esc` | Menú / escapar (tap) |
+| `Q` / `Ctrl+C` | Salir — devolver al bot |
+
+## Protección de memoria
+
+Dos mecanismos protegen tu máquina:
+
+1. **Autocheck de RSS (~30s)** — si el daemon supera 450 MB de RSS, sale limpiamente y el statusline lo relanza en un segundo.
+2. **Higiene de imágenes kitty (~45s)** — el daemon envía un comando de borrado antes del próximo frame de backdrop para liberar el almacenamiento acumulado en Warp.
+
 ---
 
 ## Experimental: banner pixel (placeholders Unicode de kitty)
@@ -276,6 +317,7 @@ AFK_ARCADE_NO_PIXEL=1 # en tu entorno
 | `/afk backdrop <on\|off>` | Juego como fondo de terminal (kitty z=-2); banner colapsa a HUD |
 | `/afk backdrop fps <5..35>` | Fps de streaming para backdrop (predeterminado: `24`) |
 | `/afk bot <on\|off>` | Bot heurístico: piloto tranquilo mientras escribís, agresivo mientras Claude trabaja |
+| `/afk control` | Tomá el volante: abre pestaña controladora lateral; el bot juega cuando no está conectado |
 | `/afk debug on` | Activar log de diagnósticos JSONL en `~/.claude/afk-arcade/debug.log` |
 | `/afk debug off` | Desactivar diagnósticos |
 | `/afk debug tail [n]` | Imprimir las últimas `n` líneas del log (predeterminado: 30) |

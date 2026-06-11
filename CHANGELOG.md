@@ -6,6 +6,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.0] — 2026-06-11
+
+### Added
+- **User controller sidecar** (`scripts/control.mjs`) — interactive CLI run in a
+  second terminal tab. Raw-mode stdin; WASD/arrows held, SPACE/F/X/1-7/Enter/Esc
+  forwarded to the engine; Q/Ctrl+C releases cleanly. Writes
+  `TMP_ROOT/doom/control.json` atomically at ~15Hz and immediately on any key change.
+- **Ownership switch in daemon** — daemon reads `control.json` every ≤100ms and calls
+  `controlOwner()` to decide who drives. On `bot → user` transition: `bot.suspend()`
+  releases all held keys and drains the key queue. On `user → bot` transition: all
+  user-held codes are released and `bot.resume()` re-arms the bot. User tap events are
+  sent as down+up pairs with ~80ms pulse.
+- **`bot.suspend()` / `bot.resume()`** on `lib/doom-bot.mjs` — clean handoff API for
+  the ownership switch.
+- **`lib/control-core.mjs`** — pure (no I/O) helper module:
+  `mapKeyEventToDoom(keyName)`, `buildControlState(held, taps, seq)`,
+  `controlOwner(state, nowMs)`. Fully unit-testable without a TTY.
+- **`/afk control`** command on `afk-ctl.mjs` — on Darwin+Warp: writes a uniquely
+  timestamped Warp launch config (`claude-doom-ctl-<epoch>.yaml`) and opens it via
+  `warp://launch/`. Cleans up generated configs older than 1 day. Falls back to
+  printing the manual command on other platforms/terminals.
+- **`bot-status.json` gains `owner` field** — `"user" | "bot"`. Statusline shows
+  *"you're driving 🎮"* when `owner === 'user'` (overrides all other mode text).
+- **RSS self-check belt** — daemon checks `process.memoryUsage().rss` every ~30s.
+  If RSS > 450 MB: logs `{ recycle: 'rss', rssMb }` and exits 0 (statusline respawns).
+- **Kitty image hygiene belt** — every ~45s the daemon prepends `kittyDeleteImage(77)`
+  to the next backdrop streaming write (single atomic `writeSync`). Purges accumulated
+  image storage from Warp's replace-by-id calls.
+- **`rssMb` in telemetry** — periodic stream dbgLog entry now includes `rssMb`.
+- **`test/control.test.mjs`** (Phase G) — 10 unit tests:
+  `mapKeyEventToDoom` mapping correctness, `buildControlState` schema/capping,
+  `controlOwner` fresh/stale/zero/null, `bot.suspend()` no-down-press guarantee,
+  `bot.resume()` re-issue-forward guarantee. Wired into `test/run.mjs`.
+
+### Changed
+- `bot-status.json` now includes `owner: "user" | "bot"` and `rssMb` fields.
+- Statusline `buildHudLine` checks `botStatus.owner === 'user'` before any other
+  status text (attention/working/idle/afk) to surface the "you're driving" state.
+
 ## [0.6.0] — 2026-06-11
 
 ### Added

@@ -20,9 +20,10 @@ import { readRegistry, pruneRegistry } from '../lib/registry.mjs';
 import { computeGameWidth, buildScaledBuffer, bufferGetPixel } from '../lib/scale.mjs';
 import { sharpen, toneLift } from '../lib/postfx.mjs';
 import { encodePngFast } from '../lib/png.mjs';
-import { kittyBackdropFileImage } from '../lib/gfx-protocol.mjs';
+import { kittyBackdropFileImage, kittyDeleteImage } from '../lib/gfx-protocol.mjs';
 import { debugEnabled, dbgLog } from '../lib/debug.mjs';
 import { createBot } from '../lib/doom-bot.mjs';
+import { controlOwner } from '../lib/control-core.mjs';
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -38,6 +39,31 @@ const FRAME_PNG    = path.join(DOOM_TMP, 'frame.png');
 const BACKDROP_PNG = path.join(DOOM_TMP, 'backdrop.png');
 // Written when bot === true; statusline reads for HUD text.
 const BOT_STATUS   = path.join(DOOM_TMP, 'bot-status.json');
+// Written by scripts/control.mjs; daemon reads to detect user ownership.
+const CONTROL_JSON = path.join(DOOM_TMP, 'control.json');
+
+// ── Memory belt constants ──────────────────────────────────────────────────────
+
+/**
+ * RSS self-check interval — every ~30s.
+ * If the process exceeds RSS_LIMIT_BYTES the daemon recycles itself (exits 0);
+ * the statusline auto-respawns a fresh instance. This caps steady-state memory
+ * growth from WASM heap churn and cached image buffers.
+ */
+const RSS_CHECK_INTERVAL_MS = 30_000;
+const RSS_LIMIT_BYTES        = 450 * 1024 * 1024; // 450 MB
+
+/**
+ * Kitty image hygiene interval — every ~45s.
+ * Warp's kitty replace-by-id implementation leaks image storage when the same
+ * image ID is retransmitted at high framerate. Periodically sending a full
+ * delete + retransmit cycle (kittyDeleteImage(77) prepended to the next t=f
+ * write) forces Warp to release the accumulated storage.
+ *
+ * This constant controls the cadence; the deletion is batched into the NEXT
+ * streaming write so it arrives as a single atomic tty write.
+ */
+const KITTY_HYGIENE_INTERVAL_MS = 45_000;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -218,6 +244,36 @@ async function main() {
   let lastSessionStateAt = 0;
   let cachedIsAggressive = false;
 
+  // ── User-controller ownership state ─────────────────────────────────────
+  // Cached control.json read and the resulting ownership decision.
+  // We read control.json at most every 100ms (same cadence as config caching).
+  const CONTROL_READ_INTERVAL_MS = 100;
+  let lastControlReadAt = 0;
+  let cachedControlState = null; // parsed control.json, or null if absent
+  let currentOwner = 'bot';     // 'user' | 'bot'
+
+  // Set of DOOM key codes currently pushed DOWN on behalf of the user.
+  // Used to diff against control.held on each tick so we only send deltas.
+  const userHeldCodes = new Set();
+
+  // Last tap seq processed from control.json — avoids replaying old taps.
+  let lastProcessedTapSeq = 0;
+
+  // Queue of pending user tap releases: { releaseAt: number, code: number }
+  // Taps are sent as down immediately; the up is scheduled ~80ms later.
+  const userTapReleaseQueue = [];
+
+  // ── Memory belt: RSS self-check ──────────────────────────────────────────
+  // Every RSS_CHECK_INTERVAL_MS check process RSS. If it exceeds the limit,
+  // recycle: exit 0 and let the statusline respawn a fresh daemon.
+  let lastRssCheckAt = 0;
+
+  // ── Kitty image hygiene tracking ────────────────────────────────────────
+  // Every KITTY_HYGIENE_INTERVAL_MS we prepend a kittyDeleteImage(77) call
+  // to the next backdrop streaming write to purge accumulated Warp image storage.
+  let lastKittyHygieneAt = 0;
+  let pendingKittyDelete = false; // set to true when hygiene tick fires
+
   let lastFrameAt = 0;
   let tickCount = 0;
   let frameCount = 0;
@@ -258,41 +314,141 @@ async function main() {
 
       const now = Date.now();
 
-      // ── Bot update (every tick) ────────────────────────────────────────
+      // ── Memory belt: RSS self-check (~30s cadence) ───────────────────
+      if (now - lastRssCheckAt >= RSS_CHECK_INTERVAL_MS) {
+        lastRssCheckAt = now;
+        const { rss } = process.memoryUsage();
+        if (rss > RSS_LIMIT_BYTES) {
+          const rssMb = Math.round(rss / 1024 / 1024);
+          try { dbgLog('daemon', { recycle: 'rss', rssMb }); } catch { /* ignore */ }
+          if (bot) { try { bot.dispose(); } catch {} }
+          clearInterval(tickTimer);
+          process.exit(0);
+        }
+      }
+
+      // ── Kitty image hygiene: arm delete flag every ~45s ───────────────
+      if (now - lastKittyHygieneAt >= KITTY_HYGIENE_INTERVAL_MS) {
+        lastKittyHygieneAt = now;
+        // The flag is consumed on the next backdrop streaming write,
+        // prepending a delete APC in the same single writeSync call.
+        pendingKittyDelete = true;
+      }
+
+      // ── Bot / user-controller update ───────────────────────────────────
       if (bot) {
-        // Refresh aggressive state at most every SESSION_STATE_INTERVAL_MS
-        if (now - lastSessionStateAt >= SESSION_STATE_INTERVAL_MS) {
-          lastSessionStateAt = now;
-          try {
-            // Check if any session file has mode='working' fresh <15s
-            const files = fs.readdirSync(SESSION_DIR).filter(f => f.endsWith('.json'));
-            let aggressive = false;
-            for (const f of files) {
-              const data = readJson(path.join(SESSION_DIR, f), null);
-              if (data && data.mode === 'working' && typeof data.updatedAt === 'number') {
-                if (now - data.updatedAt < 15_000) {
-                  aggressive = true;
-                  break;
+        // ── Read control.json at most every CONTROL_READ_INTERVAL_MS ─────
+        if (now - lastControlReadAt >= CONTROL_READ_INTERVAL_MS) {
+          lastControlReadAt = now;
+          cachedControlState = readJson(CONTROL_JSON, null);
+        }
+
+        const newOwner = controlOwner(cachedControlState, now);
+
+        // ── Ownership transition detection ────────────────────────────────
+        if (newOwner !== currentOwner) {
+          if (newOwner === 'user') {
+            // bot → user: release everything the bot holds and suspend it
+            try { bot.suspend(); } catch { /* ignore */ }
+          } else {
+            // user → bot: release all user-held keys and resume the bot
+            for (const code of userHeldCodes) {
+              try { engine.pushKey(0, code); } catch { /* ignore */ }
+            }
+            userHeldCodes.clear();
+            try { bot.resume(); } catch { /* ignore */ }
+          }
+          currentOwner = newOwner;
+        }
+
+        if (currentOwner === 'user') {
+          // ── Apply user control state ─────────────────────────────────────
+          const ctrl = cachedControlState;
+          if (ctrl) {
+            // Diff held codes: push down for new codes, up for removed ones
+            const newHeld = new Set(Array.isArray(ctrl.held) ? ctrl.held : []);
+            for (const code of newHeld) {
+              if (!userHeldCodes.has(code)) {
+                try { engine.pushKey(1, code); } catch { /* ignore */ }
+                userHeldCodes.add(code);
+              }
+            }
+            for (const code of userHeldCodes) {
+              if (!newHeld.has(code)) {
+                try { engine.pushKey(0, code); } catch { /* ignore */ }
+                userHeldCodes.delete(code);
+              }
+            }
+
+            // Process new tap events (seq > lastProcessedTapSeq)
+            if (Array.isArray(ctrl.taps)) {
+              for (const tap of ctrl.taps) {
+                if (
+                  typeof tap.seq === 'number' &&
+                  typeof tap.code === 'number' &&
+                  tap.seq > lastProcessedTapSeq
+                ) {
+                  lastProcessedTapSeq = tap.seq;
+                  try { engine.pushKey(1, tap.code); } catch { /* ignore */ }
+                  // Schedule key-up ~80ms later via the release queue
+                  userTapReleaseQueue.push({ releaseAt: now + 80, code: tap.code });
                 }
               }
             }
-            cachedIsAggressive = aggressive;
-          } catch {
-            // SESSION_DIR may not exist — treat as non-aggressive
+          }
+        } else {
+          // ── Bot owns: flush tap-release queue, then run normal update ──
+          // Refresh aggressive state at most every SESSION_STATE_INTERVAL_MS
+          if (now - lastSessionStateAt >= SESSION_STATE_INTERVAL_MS) {
+            lastSessionStateAt = now;
+            try {
+              const files = fs.readdirSync(SESSION_DIR).filter(f => f.endsWith('.json'));
+              let aggressive = false;
+              for (const f of files) {
+                const data = readJson(path.join(SESSION_DIR, f), null);
+                if (data && data.mode === 'working' && typeof data.updatedAt === 'number') {
+                  if (now - data.updatedAt < 15_000) {
+                    aggressive = true;
+                    break;
+                  }
+                }
+              }
+              cachedIsAggressive = aggressive;
+            } catch {
+              // SESSION_DIR may not exist — treat as non-aggressive
+            }
+          }
+
+          try {
+            bot.update(now, cachedIsAggressive);
+          } catch { /* bot error — keep ticking */ }
+        }
+
+        // Flush user tap-release queue (regardless of current owner, so pending
+        // releases fire even if ownership just switched back to bot)
+        if (userTapReleaseQueue.length > 0) {
+          let i = 0;
+          while (i < userTapReleaseQueue.length) {
+            if (userTapReleaseQueue[i].releaseAt <= now) {
+              try { engine.pushKey(0, userTapReleaseQueue[i].code); } catch { /* ignore */ }
+              userTapReleaseQueue.splice(i, 1);
+            } else {
+              i++;
+            }
           }
         }
 
-        try {
-          bot.update(now, cachedIsAggressive);
-        } catch { /* bot error — keep ticking */ }
-
-        // Write bot-status.json at ~1s cadence
+        // Write bot-status.json at ~1s cadence (includes owner field)
         if (now - lastBotStatusAt >= BOT_STATUS_INTERVAL_MS) {
           lastBotStatusAt = now;
+          const { rss } = process.memoryUsage();
+          const rssMb = Math.round(rss / 1024 / 1024);
           try {
             writeJsonAtomic(BOT_STATUS, {
               playing: true,
               aggressive: cachedIsAggressive,
+              owner: currentOwner,
+              rssMb,
               updatedAt: now,
             });
           } catch { /* non-fatal */ }
@@ -404,6 +560,14 @@ async function main() {
                 fs.writeFileSync(tmp, pngBuf);
                 fs.renameSync(tmp, BACKDROP_PNG);
               } catch { /* keep previous frame on disk */ }
+              // Kitty image hygiene: prepend a delete APC before the next
+              // retransmit when the hygiene interval has fired. This purges
+              // accumulated image storage in Warp (replace-by-id leak fix).
+              // Both escape sequences are written in a single writeSync call
+              // so they arrive atomically from the terminal's perspective.
+              const deletePrefix = pendingKittyDelete ? kittyDeleteImage(77) : '';
+              pendingKittyDelete = false; // consumed
+
               for (const [_sid, entry] of ttyEntries) {
                 try {
                   const txStr = kittyBackdropFileImage(BACKDROP_PNG, {
@@ -412,18 +576,20 @@ async function main() {
                     rows: entry.lines,
                   });
                   const fd = fs.openSync(entry.ttyPath, 'w');
-                  fs.writeSync(fd, txStr);
+                  // Single write: optional delete + retransmit (atomic)
+                  fs.writeSync(fd, deletePrefix + txStr);
                   fs.closeSync(fd);
                 } catch {
                   // Write failed — statusline will re-register or prune on next poll
                 }
               }
 
-              // Telemetry: every ~100th streamed frame
+              // Telemetry: every ~100th streamed frame (includes RSS for monitoring)
               if (debugEnabled(cfg) && streamFrameCount % 100 === 0) {
                 const achievedFps = streamFrameCount > 1
                   ? Math.round(1000 / streamInterval)
                   : 0;
+                const { rss } = process.memoryUsage();
                 try {
                   dbgLog('daemon', {
                     stream: {
@@ -431,6 +597,7 @@ async function main() {
                       ttys: ttyEntries.length,
                       pngBytes: pngBuf.length,
                       encodeMs,
+                      rssMb: Math.round(rss / 1024 / 1024),
                     },
                   });
                 } catch { /* ignore */ }

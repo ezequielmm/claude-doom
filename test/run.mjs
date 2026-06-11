@@ -17,6 +17,7 @@ import { runPlayTests } from './play.test.mjs';
 import { runRenderTests } from './render.test.mjs';
 import { runDebugTests } from './debug.test.mjs';
 import { runBotTests } from './bot.test.mjs';
+import { runControlTests } from './control.test.mjs';
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -368,6 +369,13 @@ const botCounters = { passed: { value: passed }, failed: { value: failed } };
 await runBotTests(botCounters, { test });
 passed = botCounters.passed.value;
 failed = botCounters.failed.value;
+
+// ── Phase G: control-core + bot handoff tests ─────────────────────────────────
+
+const controlCounters = { passed: { value: passed }, failed: { value: failed } };
+await runControlTests(controlCounters, { test });
+passed = controlCounters.passed.value;
+failed = controlCounters.failed.value;
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 

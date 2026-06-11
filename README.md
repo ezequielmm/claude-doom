@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License" /></a>
-  <img src="https://img.shields.io/badge/version-0.6.0-informational" alt="version 0.6.0" />
+  <img src="https://img.shields.io/badge/version-0.7.0-informational" alt="version 0.7.0" />
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen" alt="Node >= 20" />
   <img src="https://img.shields.io/badge/dependencies-zero-success" alt="Zero dependencies" />
   <img src="https://img.shields.io/badge/Claude%20Code-%3E%3D2.1.153-blueviolet" alt="Claude Code >= 2.1.153" />
@@ -234,6 +234,44 @@ region), and stuck states (unchanged center signature). No game-state injection.
 /afk bot off   # disable (engine returns to attract demo)
 ```
 
+### Take the wheel
+
+`/afk control` opens a **controller sidecar** in a new Warp tab (or prints the
+command for other terminals) so *you* play DOOM while Claude works:
+
+```sh
+/afk control
+```
+
+The philosophy: **you play while Claude thinks; the bot plays when the console
+comes back to you and you start typing.** Ownership is fully automatic — no
+mode-switch needed:
+
+| Who drives | When |
+|---|---|
+| **You** | The controller tab is open and your heartbeat is fresh (<1.5s old) |
+| **Bot** | Controller tab is closed, quit (`Q`), or 1.5s without a heartbeat |
+
+The controller sends your keypresses to the daemon at ~15Hz via
+`/tmp/afk-arcade/doom/control.json`. When you quit (`Q` or Ctrl+C), a
+zero-heartbeat sentinel is written instantly and the bot resumes with no gap.
+The HUD shows *"you're driving 🎮"* while the sidecar is connected.
+
+Controls in the controller tab:
+
+| Key | Action |
+|---|---|
+| `W` / `↑` | Move forward (held) |
+| `S` / `↓` | Move backward (held) |
+| `A` / `←` | Turn left (held) |
+| `D` / `→` | Turn right (held) |
+| `Space` | Use / open door (tap) |
+| `F` or `X` | Fire weapon (held) |
+| `1`–`7` | Select weapon (tap) |
+| `Enter` | Menu confirm (tap) |
+| `Esc` | Menu / escape (tap) |
+| `Q` / `Ctrl+C` | Quit — hand back to bot |
+
 ### Pixel banner (U=1 placeholders)
 
 `/afk style pixel` enables an experimental mode that renders the DOOM banner as a **real PNG image inside the Claude Code statusline** using the [kitty graphics protocol Unicode placeholder](https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders) (U=1 virtual placements).
@@ -271,6 +309,19 @@ or hard-disable pixel mode regardless of config:
 AFK_ARCADE_NO_PIXEL=1 # set in your environment
 ```
 
+### Memory protection
+
+Two built-in belts protect your machine from runaway resource usage:
+
+1. **RSS self-check** — the daemon checks its own memory footprint every ~30s.
+   If RSS exceeds 450 MB it exits cleanly; the statusline auto-respawns a fresh
+   process within a second. Normal steady-state is ~120–200 MB.
+
+2. **Kitty image hygiene** — every ~45s the daemon prepends a kitty delete
+   command to the next backdrop frame write. This forces Warp to release
+   accumulated image storage from replace-by-id calls that would otherwise
+   grow unbounded at streaming rates.
+
 ---
 
 ## Commands
@@ -287,6 +338,7 @@ AFK_ARCADE_NO_PIXEL=1 # set in your environment
 | `/afk backdrop <on\|off>` | Game as terminal background (kitty z=-2); banner collapses to HUD |
 | `/afk backdrop fps <5..35>` | Streaming fps for backdrop mode (default: `24`) |
 | `/afk bot <on\|off>` | Heuristic bot pilot: calm autopilot while typing, aggressive while Claude works |
+| `/afk control` | Take the wheel: open controller sidecar tab; bot autoplays when not connected |
 | `/afk play` | Launch DOOM in a Warp tab (macOS + Warp installed); otherwise print the command |
 | `/afk fetch-doom` | Download DOOM WASM assets into `vendor/` |
 | `/afk setup [--yes] [--no-iterm]` | Guided installer — wires statusline, downloads assets, offers iTerm2 |
