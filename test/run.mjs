@@ -40,6 +40,11 @@ process.on('exit', () => {
   } catch { /* best effort */ }
 });
 
+// Deterministic baseline for the base test phase: fire game at 5 rows.
+// Safe because the snapshot above restores the user's real values on exit.
+spawnSync(process.execPath, [CTL, 'game', 'fire'], { encoding: 'utf8' });
+spawnSync(process.execPath, [CTL, 'rows', '5'], { encoding: 'utf8' });
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 let passed = 0;
