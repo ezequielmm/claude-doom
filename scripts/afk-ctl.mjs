@@ -230,6 +230,54 @@ switch (cmd) {
     break;
   }
 
+  case 'act': {
+    // One-shot game input for agentic play (/doom — Claude takes the controls).
+    // Writes control.json with the given keys held, keeps the heartbeat alive
+    // for --ms (max 3000), then releases. The daemon's ownership logic treats
+    // this exactly like a human controller: bot suspends, keys apply, bot
+    // resumes ~1.5s after the heartbeat stops.
+    const KEYMAP = {
+      w: 0xad, up: 0xad, s: 0xaf, down: 0xaf,
+      a: 0xac, left: 0xac, d: 0xae, right: 0xae,
+      f: 0xa3, x: 0xa3, fire: 0xa3,
+      space: 0xa2, use: 0xa2,
+      esc: 27, enter: 13,
+      1: 49, 2: 50, 3: 51, 4: 52, 5: 53, 6: 54, 7: 55,
+    };
+    const keysArg = (args[1] ?? '').toLowerCase();
+    const msFlag = args.indexOf('--ms');
+    const holdMs = Math.min(3000, Math.max(200, msFlag > -1 ? parseInt(args[msFlag + 1], 10) || 1200 : 1200));
+    const names = keysArg.split(',').map(k => k.trim()).filter(Boolean);
+    const codes = names.map(k => KEYMAP[k]).filter(c => c !== undefined);
+    if (!codes.length) {
+      process.stdout.write(
+        'afk-arcade: usage: act <keys> [--ms <200..3000>]\n' +
+        '  keys: comma-separated — w,a,s,d,up,down,left,right,f|fire,space|use,esc,enter,1-7\n' +
+        '  example: act w,f --ms 1500   (run forward firing for 1.5s)\n' +
+        `  frame to look at: ${path.join(os.tmpdir(), 'afk-arcade', 'doom', 'backdrop.png')}\n`,
+      );
+      process.exit(1);
+    }
+    const controlFile = path.join(os.tmpdir(), 'afk-arcade', 'doom', 'control.json');
+    const writeControl = (held, hb) => {
+      try {
+        const tmp = controlFile + '.tmp';
+        fs.mkdirSync(path.dirname(controlFile), { recursive: true });
+        fs.writeFileSync(tmp, JSON.stringify({ heartbeat: hb, held, taps: [], pid: process.pid }), 'utf8');
+        fs.renameSync(tmp, controlFile);
+      } catch { /* daemon absent — harmless */ }
+    };
+    writeControl(codes, Date.now());
+    const refresher = setInterval(() => writeControl(codes, Date.now()), 400);
+    setTimeout(() => {
+      clearInterval(refresher);
+      writeControl([], 0);
+      process.stdout.write(`acted: [${names.join(' ')}] held ${holdMs}ms — frame: ${path.join(os.tmpdir(), 'afk-arcade', 'doom', 'backdrop.png')}\n`);
+      process.exit(0);
+    }, holdMs);
+    break;
+  }
+
   case 'debug': {
     const sub = args[1];
 

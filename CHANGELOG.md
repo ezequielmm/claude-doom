@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.1] — 2026-06-11
+
+### Added
+- **/doom — Claude takes the controls**: agentic gameplay. The slash command instructs
+  the session to Read the live backdrop frame (vision), narrate one line per move, and
+  act via the new `afk-ctl act <keys> [--ms]` one-shot input (holds keys with a live
+  heartbeat, then releases — the daemon treats it exactly like a human controller, so
+  the bot suspends and resumes automatically). ~12 moves per invocation.
+
 ## [0.7.0] — 2026-06-11
 
 ### Added
