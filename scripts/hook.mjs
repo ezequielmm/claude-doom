@@ -57,7 +57,7 @@ function writeStatuslineShim(pluginRoot) {
   try {
     mkdirp(CONFIG_DIR);
     const shimPath = path.join(CONFIG_DIR, 'statusline.sh');
-    const content = `#!/bin/bash\nexec node --no-warnings "${pluginRoot}/scripts/statusline.mjs"\n`;
+    const content = `#!/bin/bash\nexec "${process.execPath}" --no-warnings "${pluginRoot}/scripts/statusline.mjs"\n`;
     fs.writeFileSync(shimPath, content, 'utf8');
     fs.chmodSync(shimPath, 0o755);
   } catch {
