@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.8.0] — 2026-06-11
+
+### Added
+
+- **`scripts/doomclaude.mjs` — F8 one-key keyboard takeover**: transparent PTY
+  wrapper that runs `claude` inside a `/usr/bin/expect`-managed PTY. Press `F8`
+  (or `AFK_ARCADE_DRIVE_KEY=f9|f10`) to enter DRIVE mode — keystrokes stop
+  reaching Claude and instead flow to the DOOM bridge via
+  `scripts/control.mjs --stdin-bridge`. Press `F8` again to return to Chat mode.
+  Claude keeps running completely unaffected; only stdin is redirected.
+  - `--selftest` flag: wraps a `/bin/stty size` inner process through
+    `/usr/bin/script` to verify the PTY mechanism end-to-end without launching
+    claude. Accepts `0x0` from headless/CI fabricated PTYs as a valid pass.
+  - `AFK_ARCADE_DRIVE_KEY` env variable: `f8` (default), `f9`, `f10`.
+  - Terminal bell (`\a`) rings once on each toggle as tactile feedback.
+  - SIGWINCH propagation: `trap WINCH` updates claude's PTY size on terminal
+    resize.
+- **`scripts/control.mjs --stdin-bridge` flag**: new mode that skips the TTY
+  requirement and reads raw bytes from STDIN (pipe). Decodes keys via the same
+  `decodeKeys`/`HeldKeyTracker` path as interactive mode and writes `control.json`
+  at ~15Hz while input is active. Idle protocol:
+  - 2000ms without bytes → writes `heartbeat:0` once and idles (bot resumes).
+  - `\x00\x01` sentinel (from wrapper drive-exit) → immediate `heartbeat:0` + exit.
+  - STDIN close → `heartbeat:0` + clean exit.
+- **`test/wrapper.test.mjs`** (Phase H) — 10 tests: 7 bridge unit tests
+  (held keys, released keys, taps, sentinel, 2s silence auto-release, wake-up
+  after silence, stdin-close cleanup) + 3 doomclaude tests (selftest passes,
+  `f9` key accepted, invalid key falls back with warning). Wired into
+  `test/run.mjs`.
+
 ## [0.7.1] — 2026-06-11
 
 ### Added

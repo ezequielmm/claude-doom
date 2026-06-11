@@ -8,11 +8,28 @@
  * Requires a TTY (stdin must be a real terminal). Exits with an error message
  * if no TTY is available.
  *
+ * --stdin-bridge flag:
+ *   node scripts/control.mjs --stdin-bridge
+ *
+ * In bridge mode stdin is a pipe (not a TTY). Raw bytes are read from stdin,
+ * decoded via decodeKeys/HeldKeyTracker, and written to control.json at ~15Hz
+ * exactly as the interactive mode would. No screen output. Bridge mode is
+ * used by doomclaude.mjs to relay keyboard input from the doomclaude wrapper
+ * while the user is in DRIVE mode.
+ *
+ * Sentinel: when the wrapper exits DRIVE mode it writes \\x00\\x01 to the
+ * bridge. The bridge releases all held keys and writes heartbeat:0 immediately.
+ *
+ * Heartbeat management in bridge mode:
+ *   - While bytes arrive: heartbeat ticks at ~15Hz (keeps daemon in user mode).
+ *   - 2000ms silence: heartbeat is set to 0 once (bot resumes).
+ *   - Sentinel \\x00\\x01 received: immediate heartbeat:0 + held:[].
+ *
  * The daemon reads TMP_ROOT/doom/control.json on every tick. When the
  * heartbeat is fresh (<1500ms old) the daemon lets the user drive;
  * when it goes stale or heartbeat===0 the bot resumes automatically.
  *
- * Controls:
+ * Controls (interactive mode):
  *   w / up-arrow      move forward
  *   s / down-arrow    move backward
  *   a / left-arrow    turn left
@@ -38,14 +55,20 @@ import { TMP_ROOT } from '../lib/state.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// ── Require TTY ───────────────────────────────────────────────────────────────
+// ── Flag detection ─────────────────────────────────────────────────────────────
 
-if (!process.stdin.isTTY || typeof process.stdin.setRawMode !== 'function') {
-  process.stderr.write(
-    'control.mjs: stdin must be a TTY.\n' +
-    'Run this command in a fresh interactive terminal tab — not piped or scripted.\n',
-  );
-  process.exit(1);
+const STDIN_BRIDGE_MODE = process.argv.includes('--stdin-bridge');
+
+// ── Require TTY (interactive mode only) ──────────────────────────────────────
+
+if (!STDIN_BRIDGE_MODE) {
+  if (!process.stdin.isTTY || typeof process.stdin.setRawMode !== 'function') {
+    process.stderr.write(
+      'control.mjs: stdin must be a TTY.\n' +
+      'Run this command in a fresh interactive terminal tab — not piped or scripted.\n',
+    );
+    process.exit(1);
+  }
 }
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
@@ -53,6 +76,142 @@ if (!process.stdin.isTTY || typeof process.stdin.setRawMode !== 'function') {
 const DOOM_TMP      = path.join(TMP_ROOT, 'doom');
 const CONTROL_JSON  = path.join(DOOM_TMP, 'control.json');
 const DAEMON_PIDFILE = path.join(DOOM_TMP, 'daemon.pid');
+
+// ── Shared atomic write helper (used by both modes) ──────────────────────────
+
+function mkdirpSync_shared(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+}
+
+function writeReleaseState_shared() {
+  try {
+    mkdirpSync_shared(DOOM_TMP);
+    const tmp = CONTROL_JSON + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify({ heartbeat: 0, held: [], taps: [], pid: process.pid }), 'utf8');
+    fs.renameSync(tmp, CONTROL_JSON);
+  } catch {
+    // Best effort
+  }
+}
+
+// ── stdin-bridge mode ─────────────────────────────────────────────────────────
+
+if (STDIN_BRIDGE_MODE) {
+  // Single startup line to stderr so the wrapper knows we're alive
+  process.stderr.write('control.mjs[bridge]: started — reading from stdin\n');
+
+  const bridgeHeld = new Set();
+  const bridgeTaps = [];
+  let bridgeTapSeq = 1;
+  let bridgeLastInputMs = 0;
+  let bridgeIdle = false; // true after we've written heartbeat:0 once
+
+  function bridgeWriteState() {
+    try {
+      mkdirpSync_shared(DOOM_TMP);
+      const state = buildControlState(Array.from(bridgeHeld), bridgeTaps, bridgeTapSeq);
+      const tmp = CONTROL_JSON + '.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(state), 'utf8');
+      fs.renameSync(tmp, CONTROL_JSON);
+    } catch {
+      // Non-fatal
+    }
+  }
+
+  const bridgeTracker = new HeldKeyTracker(
+    (keyName) => {
+      const mapping = mapKeyEventToDoom(keyName);
+      if (!mapping || !mapping.held) return;
+      bridgeHeld.add(mapping.code);
+      bridgeWriteState();
+    },
+    (keyName) => {
+      const mapping = mapKeyEventToDoom(keyName);
+      if (!mapping || !mapping.held) return;
+      bridgeHeld.delete(mapping.code);
+      bridgeWriteState();
+    },
+    160,
+  );
+
+  // ~15Hz heartbeat timer — keeps daemon in user mode while input is active
+  const bridgeHeartbeat = setInterval(() => {
+    const now = Date.now();
+    bridgeTracker.sweep();
+
+    if (now - bridgeLastInputMs > 2000) {
+      // 2000ms silence — write heartbeat:0 once and become idle
+      if (!bridgeIdle) {
+        bridgeIdle = true;
+        bridgeHeld.clear();
+        bridgeTracker.releaseAll();
+        writeReleaseState_shared();
+      }
+      // Do NOT keep writing — we're idle until input arrives
+    } else {
+      bridgeIdle = false;
+      bridgeWriteState();
+    }
+  }, 66); // ~15Hz
+
+  // Stdin data handler
+  process.stdin.on('data', (buf) => {
+    // Check for sentinel \x00\x01 — wrapper signaling drive-exit
+    // Scan for sentinel anywhere in the buffer
+    for (let i = 0; i < buf.length - 1; i++) {
+      if (buf[i] === 0x00 && buf[i + 1] === 0x01) {
+        // Sentinel received: release immediately
+        clearInterval(bridgeHeartbeat);
+        bridgeTracker.releaseAll();
+        bridgeHeld.clear();
+        bridgeTaps.length = 0;
+        writeReleaseState_shared();
+        process.exit(0);
+        return;
+      }
+    }
+
+    // Normal input
+    bridgeLastInputMs = Date.now();
+    bridgeIdle = false;
+
+    const keyNames = decodeKeys(buf);
+    for (const keyName of keyNames) {
+      // Skip quit keys — bridge doesn't quit on q/ctrl+c
+      if (keyName === 'q' || keyName === '\x03') continue;
+
+      const mapping = mapKeyEventToDoom(keyName);
+      if (!mapping) continue;
+
+      if (mapping.held) {
+        bridgeTracker.see(keyName);
+      } else {
+        bridgeTaps.push({ seq: bridgeTapSeq++, code: mapping.code });
+        if (bridgeTaps.length > 16) bridgeTaps.splice(0, bridgeTaps.length - 16);
+        bridgeWriteState();
+      }
+    }
+  });
+
+  process.stdin.on('end', () => {
+    // Stdin closed — release and exit
+    clearInterval(bridgeHeartbeat);
+    bridgeTracker.releaseAll();
+    bridgeHeld.clear();
+    writeReleaseState_shared();
+    process.exit(0);
+  });
+
+  process.on('SIGINT',  () => { writeReleaseState_shared(); process.exit(0); });
+  process.on('SIGTERM', () => { writeReleaseState_shared(); process.exit(0); });
+
+  // Resume stdin as a raw binary stream — no encoding, no TTY needed
+  process.stdin.resume();
+
+  // Bridge mode ends here — the rest of this else-branch is interactive-mode-only
+} else {
+  // ── INTERACTIVE MODE ──────────────────────────────────────────────────────────
+  //    (runs only when --stdin-bridge is NOT set)
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -275,3 +434,5 @@ process.stdout.write(
 // Write initial status
 writeControlState();
 writeStatusLine();
+
+} // end if (!STDIN_BRIDGE_MODE)

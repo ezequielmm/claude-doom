@@ -18,6 +18,7 @@ import { runRenderTests } from './render.test.mjs';
 import { runDebugTests } from './debug.test.mjs';
 import { runBotTests } from './bot.test.mjs';
 import { runControlTests } from './control.test.mjs';
+import { runWrapperTests } from './wrapper.test.mjs';
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -376,6 +377,13 @@ const controlCounters = { passed: { value: passed }, failed: { value: failed } }
 await runControlTests(controlCounters, { test });
 passed = controlCounters.passed.value;
 failed = controlCounters.failed.value;
+
+// ── Phase H: doomclaude wrapper + stdin-bridge tests ──────────────────────────
+
+const wrapperCounters = { passed: { value: passed }, failed: { value: failed } };
+await runWrapperTests(wrapperCounters, { test });
+passed = wrapperCounters.passed.value;
+failed = wrapperCounters.failed.value;
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 

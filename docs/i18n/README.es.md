@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="../../LICENSE"><img src="https://img.shields.io/badge/licencia-MIT-blue.svg" alt="Licencia MIT" /></a>
-  <img src="https://img.shields.io/badge/versión-0.7.0-informational" alt="versión 0.7.0" />
+  <img src="https://img.shields.io/badge/versión-0.8.0-informational" alt="versión 0.8.0" />
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen" alt="Node >= 20" />
   <img src="https://img.shields.io/badge/dependencias-cero-success" alt="Cero dependencias" />
   <img src="https://img.shields.io/badge/Claude%20Code-%3E%3D2.1.153-blueviolet" alt="Claude Code >= 2.1.153" />
@@ -258,6 +258,42 @@ Controles en la pestaña del controlador:
 | `Enter` | Confirmar menú (tap) |
 | `Esc` | Menú / escapar (tap) |
 | `Q` / `Ctrl+C` | Salir — devolver al bot |
+
+## Takeover con una tecla (F8)
+
+**`doomclaude`** es un wrapper transparente que te permite presionar una tecla
+reservada (`F8` por defecto) dentro de tu sesión **normal** de Claude Code para
+tomar el teclado y controlar al marine — y `F8` de nuevo para devolvérselo a
+Claude. Claude sigue corriendo completamente sin interrupciones; simplemente
+deja de recibir teclas mientras manejás, y su output sigue apareciendo sobre el
+backdrop del juego.
+
+```sh
+# Lanzar Claude Code a través del wrapper
+node ~/afk-arcade-claude/scripts/doomclaude.mjs
+
+# O agregar un alias
+alias doom-claude='node ~/afk-arcade-claude/scripts/doomclaude.mjs'
+doom-claude
+```
+
+| Modo | Qué pasa |
+|---|---|
+| **Chat mode** (default) | Cada tecla va a Claude sin cambios |
+| **Presionás F8** | DRIVE mode — las teclas van al bridge de DOOM; el output de Claude sigue en pantalla |
+| **Presionás F8 de nuevo** | De vuelta a Chat mode; el bridge libera el control y el bot reanuda |
+
+El terminal suena una vez en cada toggle. El HUD muestra *"you're driving 🎮"*
+mientras el bridge está activo.
+
+**Variable de entorno:** `AFK_ARCADE_DRIVE_KEY` — cambia la tecla de toggle:
+
+```sh
+AFK_ARCADE_DRIVE_KEY=f9  doom-claude   # usar F9 en lugar de F8
+AFK_ARCADE_DRIVE_KEY=f10 doom-claude   # usar F10
+```
+
+Valores válidos: `f8` (por defecto), `f9`, `f10`.
 
 ## Protección de memoria
 

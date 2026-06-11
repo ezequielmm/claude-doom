@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License" /></a>
-  <img src="https://img.shields.io/badge/version-0.7.0-informational" alt="version 0.7.0" />
+  <img src="https://img.shields.io/badge/version-0.8.0-informational" alt="version 0.8.0" />
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen" alt="Node >= 20" />
   <img src="https://img.shields.io/badge/dependencies-zero-success" alt="Zero dependencies" />
   <img src="https://img.shields.io/badge/Claude%20Code-%3E%3D2.1.153-blueviolet" alt="Claude Code >= 2.1.153" />
@@ -272,6 +272,53 @@ Controls in the controller tab:
 | `Esc` | Menu / escape (tap) |
 | `Q` / `Ctrl+C` | Quit — hand back to bot |
 
+### One-key takeover (F8)
+
+**`doomclaude`** is a transparent launcher wrapper that lets you press a single
+reserved key (`F8` by default) inside your **existing** Claude Code session to
+grab the keyboard and drive the marine — then `F8` again to give it back. Claude
+keeps running completely unaffected the whole time; it simply stops receiving
+keystrokes while you drive, and its output keeps streaming over the game backdrop.
+
+```sh
+# Launch Claude Code through the wrapper
+node ~/afk-arcade-claude/scripts/doomclaude.mjs
+
+# Or add an alias for convenience
+alias doom-claude='node ~/afk-arcade-claude/scripts/doomclaude.mjs'
+doom-claude
+```
+
+| Mode | What happens |
+|---|---|
+| **Chat mode** (default) | Every byte from your keyboard flows to Claude untouched |
+| **Press F8** | Enter DRIVE mode — keystrokes go to the DOOM bridge; Claude output still streams to the screen |
+| **Press F8 again** | Back to Chat mode; bridge releases control and the bot resumes with no gap |
+
+The terminal bell rings once on each toggle. The HUD shows *"you're driving 🎮"*
+while the bridge is active (same signal as the sidecar controller tab).
+
+**Env variable:** `AFK_ARCADE_DRIVE_KEY` — override the toggle key:
+
+```sh
+AFK_ARCADE_DRIVE_KEY=f9  doom-claude   # use F9 instead of F8
+AFK_ARCADE_DRIVE_KEY=f10 doom-claude   # use F10
+```
+
+Valid values: `f8` (default), `f9`, `f10`.
+
+**How it works:** the wrapper uses `/usr/bin/expect` (ships with macOS) to spawn
+`claude` inside a PTY while keeping ownership of the real terminal. An `interact`
+loop intercepts F8 and toggles between forwarding input to claude's PTY (chat
+mode) and piping it to `scripts/control.mjs --stdin-bridge` (drive mode). Claude
+Code never sees the F8 keypress and has no awareness of the mode switch.
+
+**Self-test** (verifies the PTY mechanism without launching claude):
+
+```sh
+node ~/afk-arcade-claude/scripts/doomclaude.mjs --selftest
+```
+
 ### Pixel banner (U=1 placeholders)
 
 `/afk style pixel` enables an experimental mode that renders the DOOM banner as a **real PNG image inside the Claude Code statusline** using the [kitty graphics protocol Unicode placeholder](https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders) (U=1 virtual placements).
@@ -339,6 +386,7 @@ Two built-in belts protect your machine from runaway resource usage:
 | `/afk backdrop fps <5..35>` | Streaming fps for backdrop mode (default: `24`) |
 | `/afk bot <on\|off>` | Heuristic bot pilot: calm autopilot while typing, aggressive while Claude works |
 | `/afk control` | Take the wheel: open controller sidecar tab; bot autoplays when not connected |
+| `doomclaude` | F8 one-key takeover: launch Claude through the wrapper; press F8 to toggle keyboard between Claude and the marine |
 | `/afk play` | Launch DOOM in a Warp tab (macOS + Warp installed); otherwise print the command |
 | `/afk fetch-doom` | Download DOOM WASM assets into `vendor/` |
 | `/afk setup [--yes] [--no-iterm]` | Guided installer — wires statusline, downloads assets, offers iTerm2 |
