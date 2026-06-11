@@ -30,8 +30,19 @@ node "<pluginRoot>/scripts/afk-ctl.mjs" $ARGUMENTS
 - `/afk aspect <4:3|16:10|stretch>` — set DOOM frame aspect ratio (default: `4:3` — authentic CRT look, centered with pillarbox gutters; `stretch` restores full-width legacy behavior)
 - `/afk fetch-doom` — download DOOM WASM assets into vendor/doom/ (required before game doom)
 - `/afk play` — print the command to copy into a fresh terminal to play DOOM fullscreen
+- `/afk setup [--yes] [--no-iterm]` — one-shot installer: wires statusline, downloads DOOM assets, offers iTerm2 on macOS for pixel-perfect mode
 
-**Phase B first-time setup:**
+**Zero-step install (new users):**
+
+The `SessionStart` auto-setup hook handles everything automatically after install:
+- Creates `~/.claude/afk-arcade/config.json` (if missing)
+- Writes `~/.claude/afk-arcade/statusline.sh` (if missing or stale)
+- Adds `statusLine` to `~/.claude/settings.json` (if not already present, with backup)
+- Downloads DOOM assets in the background (detached, logs to `~/.claude/afk-arcade/setup.log`)
+
+Run `/afk setup` for the guided installer which also offers iTerm2 on macOS.
+
+**Phase B first-time setup (manual alternative):**
 
 ```
 /afk fetch-doom

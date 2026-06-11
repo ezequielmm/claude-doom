@@ -121,6 +121,17 @@ switch (cmd) {
     break;
   }
 
+  case 'setup': {
+    const setupScript = path.join(ROOT, 'scripts', 'setup.mjs');
+    // Pass through --yes and --no-iterm flags if present
+    const setupArgs = args.slice(1).filter(a => a === '--yes' || a === '--no-iterm');
+    const result = spawnSync(process.execPath, ['--no-warnings', setupScript, ...setupArgs], {
+      stdio: 'inherit',
+    });
+    process.exit(result.status ?? 0);
+    break;
+  }
+
   case 'rows': {
     const raw = parseInt(args[1], 10);
     if (isNaN(raw)) {
@@ -171,6 +182,9 @@ switch (cmd) {
       '  aspect <4:3|16:10|stretch> — set DOOM frame aspect ratio (default: 4:3)',
       '  fetch-doom           — download DOOM WASM assets into vendor/doom/',
       '  play                 — print the command to play DOOM in a fresh terminal',
+      '  setup [--yes] [--no-iterm]',
+      '                       — one-shot installer: wires statusline, downloads DOOM assets,',
+      '                         offers iTerm2 on macOS (--yes to accept all, --no-iterm to skip)',
     ].join('\n') + '\n');
     break;
   }

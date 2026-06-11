@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="../../LICENSE"><img src="https://img.shields.io/badge/licencia-MIT-blue.svg" alt="Licencia MIT" /></a>
-  <img src="https://img.shields.io/badge/versión-0.2.0-informational" alt="versión 0.2.0" />
+  <img src="https://img.shields.io/badge/versión-0.2.1-informational" alt="versión 0.2.1" />
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen" alt="Node >= 20" />
   <img src="https://img.shields.io/badge/dependencias-cero-success" alt="Cero dependencias" />
   <img src="https://img.shields.io/badge/Claude%20Code-%3E%3D2.1.153-blueviolet" alt="Claude Code >= 2.1.153" />
@@ -47,30 +47,61 @@
 ## Inicio rápido
 
 ```sh
-# 1. Agregar el marketplace e instalar el plugin
+# 1. Instalar el plugin
 claude plugin marketplace add ezequielmm/claude-doom
 claude plugin install afk-arcade@afk-arcade-marketplace
 
-# 2. Agregar la entrada statusLine en ~/.claude/settings.json
+# 2. Reiniciar Claude Code
+```
+
+Eso es todo. En el primer `SessionStart`, el hook de auto-configuración:
+- Crea `~/.claude/afk-arcade/config.json` con valores predeterminados orientados a DOOM.
+- Escribe `~/.claude/afk-arcade/statusline.sh` (el shim que alimenta el banner).
+- Agrega `statusLine` a `~/.claude/settings.json` **solo si no existe ya** — se guarda una copia de respaldo como `settings.json.afk-arcade-backup` antes de cualquier cambio.
+- Descarga los assets del motor DOOM en segundo plano (WAD shareware + WASM doomgeneric GPL — descargados bajo demanda, nunca incluidos). El progreso se registra en `~/.claude/afk-arcade/setup.log`.
+
+**Instalador guiado opcional** — también ofrece iTerm2 en macOS para el modo pixel-perfect:
+
+```
+/afk setup
+```
+
+### Qué se escribe en tu máquina
+
+| Ruta | Qué es | Cuándo |
+|---|---|---|
+| `~/.claude/afk-arcade/config.json` | Configuración del plugin (game, rows, aspect) | Solo en la primera instalación, nunca se sobreescribe |
+| `~/.claude/afk-arcade/statusline.sh` | Shim que ejecuta Claude Code para el banner | Creado/actualizado en SessionStart |
+| `~/.claude/afk-arcade/setup.log` | Log de configuración y descarga de assets | Se agrega en SessionStart; se rota al alcanzar 200 KB |
+| `~/.claude/settings.json` | Se agrega la clave `statusLine` (si no existe) | Una sola vez; se guarda respaldo antes |
+| `~/.claude/settings.json.afk-arcade-backup` | Copia de respaldo de settings.json | Se escribe una vez, nunca se sobreescribe |
+| `<plugin>/vendor/doom/` | doom.js, doom.wasm, doom1.wad | Descargados en la primera configuración (en .gitignore) |
+
+<details>
+<summary>Configuración manual (si preferís hacerlo vos mismo)</summary>
+
+```sh
+# Escribir el shim y los archivos de runtime
+node <plugin>/scripts/hook.mjs   # via SessionStart, o ejecutar manualmente una vez
+
+# Descargar los assets DOOM
+node <plugin>/scripts/fetch-doom.mjs
+
+# Agregar a ~/.claude/settings.json
 ```
 
 ```json
 {
   "statusLine": {
-    "command": "bash ~/.claude/afk-arcade/statusline.sh",
-    "refreshIntervalMs": 1000
+    "type": "command",
+    "command": "/bin/bash ~/.claude/afk-arcade/statusline.sh",
+    "refreshInterval": 1,
+    "padding": 0
   }
 }
 ```
 
-```sh
-# 3. Descargar el motor DOOM (GPL-2.0 — se descarga por separado, nunca se incluye en el bundle)
-node <plugin>/scripts/fetch-doom.mjs
-
-# 4. Reiniciar Claude Code
-```
-
-> El hook `SessionStart` escribe `~/.claude/afk-arcade/statusline.sh` automáticamente en el primer arranque. No se necesita configuración manual del shim.
+</details>
 
 ---
 
@@ -159,6 +190,7 @@ El flag `--gfx auto` detecta tu terminal y elige el mejor protocolo. Usa `--res 
 | `/afk aspect <4:3\|16:10\|stretch>` | Relación de aspecto del frame (predeterminado: `4:3`) |
 | `/afk play` | Imprimir el comando para jugar en pantalla completa |
 | `/afk fetch-doom` | Descargar los assets DOOM WASM en `vendor/` |
+| `/afk setup [--yes] [--no-iterm]` | Instalador guiado — conecta statusline, descarga assets, ofrece iTerm2 |
 
 ---
 

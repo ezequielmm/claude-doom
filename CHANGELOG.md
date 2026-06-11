@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.2.1] — 2026-06-11
+
+### Added
+- **Zero-step install**: new users only need `claude plugin marketplace add` + `claude plugin install` + restart — everything self-wires on the first `SessionStart`.
+- `scripts/auto-setup.mjs` — silent SessionStart hook (MUST NOT print to stdout): creates config.json, writes/refreshes statusline.sh shim, adds `statusLine` to `~/.claude/settings.json` only if absent (with one-time backup), spawns `fetch-doom.mjs` detached in the background when `game === 'doom'`.
+- `lib/setup-core.mjs` — shared, side-effect-free helpers: `ensurePluginConfig`, `ensureShim`, `ensureStatusline`, `ensureDoomAssets`, `log`.
+- `scripts/setup.mjs` — guided interactive installer (`/afk setup [--yes] [--no-iterm]`): Node version check, config/shim/statusline wiring, DOOM asset download, graphics protocol detection, iTerm2 install offer on macOS via Homebrew.
+- `/afk setup` subcommand in `scripts/afk-ctl.mjs`.
+- `hooks/hooks.json`: second `SessionStart` hook entry for `auto-setup.mjs` (timeout 15 s).
+- "What gets written to your machine" transparency table in README (EN + ES).
+- Collapsed `<details>` manual-setup section in README for users who prefer explicit control.
+
+---
+
 ## [0.2.0] — 2026-06-11
 
 ### Added
@@ -58,6 +72,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Core test suite (`test/run.mjs`, `test/doom.test.mjs`) — DOOM tests skip cleanly when vendor assets absent
 - Zero npm dependencies — pure Node.js ESM
 
+[0.2.1]: https://github.com/ezequielmm/claude-doom/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/ezequielmm/claude-doom/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/ezequielmm/claude-doom/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/ezequielmm/claude-doom/compare/v0.1.0...v0.1.1
