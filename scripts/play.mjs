@@ -2,8 +2,13 @@
 /**
  * play.mjs — fullscreen standalone DOOM player.
  *
- * Run with:  node scripts/play.mjs
+ * Run with:  node scripts/play.mjs [options]
  * Self-test: node scripts/play.mjs --selftest
+ *
+ * Options:
+ *   --gfx <auto|iterm2|kitty|off>  Terminal graphics protocol (default: auto).
+ *   --res <full|half>              Render resolution (default: full = 1280×800;
+ *                                  half = 640×400 via 2×2 box average).
  *
  * Controls:
  *   WASD / Arrow keys  — move / turn
@@ -17,6 +22,7 @@
  * Terminal requirements:
  *   - stdin and stdout must be a TTY (unless --selftest).
  *   - Truecolor detected from COLORTERM env var (falls back to 256-color).
+ *   - Pixel-perfect mode requires iTerm2, WezTerm, or Kitty terminal.
  *
  * DOOM key codes (doomgeneric doomkeys.h):
  *   KEY_LEFTARROW  0xac   KEY_UPARROW   0xad
@@ -26,7 +32,7 @@
  *   Weapons: ASCII '1'..'7' (49..55)
  *
  * Verified: Module["_DG_PushKeyEvent"] is exported by vendor/doom/doom.js
- * (opentui-doom 0.3.11 — confirmed via grep of doom.js wasmExports assignment).
+ * (opentui-doom 0.3.11 — confirmed via rg of doom.js wasmExports assignment).
  */
 
 import { fileURLToPath } from 'node:url';
@@ -35,6 +41,18 @@ import path from 'node:path';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const SELF_TEST = process.argv.includes('--selftest');
+
+// ── CLI flags ─────────────────────────────────────────────────────────────────
+
+/** Parse a named string flag from argv: --flag value */
+function parseFlag(flag) {
+  const idx = process.argv.indexOf(flag);
+  if (idx === -1) return null;
+  return process.argv[idx + 1] ?? null;
+}
+
+const GFX_FLAG = parseFlag('--gfx') ?? 'auto';   // auto|iterm2|kitty|off
+const RES_FLAG = parseFlag('--res') ?? 'full';   // full|half
 
 // ── TTY guard ─────────────────────────────────────────────────────────────────
 
@@ -51,6 +69,8 @@ import { createDoom, vendorAssetsExist } from '../lib/doom-engine.mjs';
 import { renderHalfBlocks } from '../lib/render.mjs';
 import { computeGameWidth, buildScaledBuffer, bufferGetPixel } from '../lib/scale.mjs';
 import { decodeKeys, HeldKeyTracker } from '../lib/keys.mjs';
+import { detectGraphics, iterm2Image, kittyImage } from '../lib/gfx-protocol.mjs';
+import { encodePngFast } from '../lib/png.mjs';
 
 // ── DOOM key codes ────────────────────────────────────────────────────────────
 
@@ -171,6 +191,20 @@ async function main() {
 
   // ── Interactive path ────────────────────────────────────────────────────────
 
+  // Detect graphics protocol
+  const gfxProtocol = detectGraphics(process.env, { override: GFX_FLAG });
+
+  if (!gfxProtocol && GFX_FLAG !== 'off' && GFX_FLAG !== 'auto') {
+    // Unknown override value — warn and continue with half-blocks
+    process.stderr.write(`play.mjs: unknown --gfx value '${GFX_FLAG}', using half-blocks\n`);
+  }
+  if (!gfxProtocol && GFX_FLAG === 'auto') {
+    // Auto-detect found nothing — print a single notice line before entering alt screen
+    process.stderr.write(
+      'play.mjs: terminal does not support iTerm2 or Kitty graphics — using half-block rendering\n',
+    );
+  }
+
   // Enter alternate screen, hide cursor, enable raw mode
   process.stdout.write('\x1b[?1049h\x1b[?25l');
   process.stdin.setRawMode(true);
@@ -228,20 +262,42 @@ async function main() {
   // ── Game loop ────────────────────────────────────────────────────────────
 
   const TICK_MS   = 28;  // ~35 Hz engine tick
-  const RENDER_MS = 50;  // ~20 fps render
 
-  // Engine tick
+  // Adaptive pacing state for gfx mode
+  let _gfxNextDelay = 50;   // ms until next render (starts at 20fps target)
+  let _gfxImageId   = 1;    // stable Kitty image ID — reused to replace in-place
+  let _gfxRgbBuf    = null; // reusable RGB buffer to avoid allocations per frame
+
+  // Engine tick (same rate regardless of render path)
   const tickTimer = setInterval(() => {
     engine.tick();
   }, TICK_MS);
 
-  // Render + sweep (20fps)
-  const renderTimer = setInterval(() => {
-    tracker.sweep();
-    renderFrame(engine);
-  }, RENDER_MS);
+  // Render + sweep
+  let renderTimer;
+
+  function scheduleNextRender() {
+    renderTimer = setTimeout(() => {
+      tracker.sweep();
+      renderFrame(engine);
+      // scheduleNextRender is called at the end of renderFrame (or here for half-blocks)
+      if (!gfxProtocol) {
+        scheduleNextRender();
+      }
+    }, gfxProtocol ? _gfxNextDelay : 50);
+  }
 
   function renderFrame(eng) {
+    if (gfxProtocol) {
+      renderFrameGfx(eng);
+    } else {
+      renderFrameHalfBlocks(eng);
+    }
+  }
+
+  // ── Half-block render path (unchanged from original) ─────────────────────
+
+  function renderFrameHalfBlocks(eng) {
     const cols   = termCols;
     const rows   = termRows;
     // Reserve last row for help text; pixel rows = (rows-1)*2 (must stay even)
@@ -273,10 +329,90 @@ async function main() {
     process.stdout.write(`\x1b[?2026h${frame}\x1b[?2026l`);
   }
 
+  // ── Pixel-perfect gfx render path ────────────────────────────────────────
+
+  function renderFrameGfx(eng) {
+    const t0 = Date.now();
+
+    const cols = termCols;
+    const rows = termRows;
+    // Image height = rows-1 cells (last row reserved for status)
+    const imgRows = Math.max(1, rows - 1);
+
+    // Determine source resolution
+    let srcW, srcH;
+    let rgb;
+    if (RES_FLAG === 'half') {
+      // Downsample 1280×800 → 640×400 via simple 2×2 box average
+      srcW = Math.floor(eng.width  / 2);
+      srcH = Math.floor(eng.height / 2);
+      const full = eng.getFrameRGB();
+      const W = eng.width;
+      rgb = new Uint8Array(srcW * srcH * 3);
+      for (let y = 0; y < srcH; y++) {
+        for (let x = 0; x < srcW; x++) {
+          const sx = x * 2, sy = y * 2;
+          const i00 = (sy * W + sx) * 3;
+          const i10 = (sy * W + sx + 1) * 3;
+          const i01 = ((sy + 1) * W + sx) * 3;
+          const i11 = ((sy + 1) * W + sx + 1) * 3;
+          const di = (y * srcW + x) * 3;
+          rgb[di]     = (full[i00]     + full[i10]     + full[i01]     + full[i11])     >> 2;
+          rgb[di + 1] = (full[i00 + 1] + full[i10 + 1] + full[i01 + 1] + full[i11 + 1]) >> 2;
+          rgb[di + 2] = (full[i00 + 2] + full[i10 + 2] + full[i01 + 2] + full[i11 + 2]) >> 2;
+        }
+      }
+    } else {
+      // Full resolution: reuse buffer to avoid allocation pressure
+      srcW = eng.width;
+      srcH = eng.height;
+      if (!_gfxRgbBuf || _gfxRgbBuf.length !== srcW * srcH * 3) {
+        _gfxRgbBuf = new Uint8Array(srcW * srcH * 3);
+      }
+      rgb = eng.getFrameRGB(_gfxRgbBuf);
+    }
+
+    // Encode to PNG (level 1 for speed)
+    const png = encodePngFast(rgb, srcW, srcH);
+
+    // Build image escape
+    let imgEscape;
+    if (gfxProtocol === 'iterm2') {
+      imgEscape = iterm2Image(png, { widthCells: cols, heightCells: imgRows });
+    } else {
+      // kitty
+      imgEscape = kittyImage(png, { cols, rows: imgRows, imageId: _gfxImageId });
+    }
+
+    // Status line: achieved fps + controls hint
+    const elapsed = Date.now() - t0;
+    const fps = elapsed > 0 ? Math.round(1000 / elapsed) : 99;
+    const statusLine = `${fps}fps [${gfxProtocol}] ${HELP}`.slice(0, cols - 1);
+
+    // Emit: cursor home + synchronized output wrapper + image + cursor to status row + status
+    const frame =
+      '\x1b[H' +
+      '\x1b[?2026h' +
+      imgEscape +
+      `\x1b[${rows};1H` +         // move cursor to last row
+      '\x1b[0m' + statusLine +
+      '\x1b[?2026l';
+
+    process.stdout.write(frame);
+
+    // Adaptive pacing: next delay = max(50ms, measured * 1.2)
+    // This targets ≥10fps at full res and never busy-spins.
+    _gfxNextDelay = Math.max(50, Math.round(elapsed * 1.2));
+    scheduleNextRender();
+  }
+
+  // Start the render loop
+  scheduleNextRender();
+
   // Handle clean exit when stdin closes (e.g. EOF)
   process.stdin.on('end', () => {
     clearInterval(tickTimer);
-    clearInterval(renderTimer);
+    clearTimeout(renderTimer);
     tracker.releaseAll();
     engine.dispose();
     cleanup();
