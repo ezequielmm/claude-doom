@@ -1,5 +1,6 @@
 {
   "name": "afk-arcade-marketplace",
+  "description": "Games inside Claude Code — real DOOM in your statusline",
   "owner": { "name": "Gentleman Programming" },
   "plugins": [
     {
