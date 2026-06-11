@@ -146,6 +146,18 @@ switch (cmd) {
     break;
   }
 
+  case 'play': {
+    // Print the command to run in a fresh terminal — do NOT launch DOOM here.
+    // The statusline/hook context cannot take over Claude Code's own terminal.
+    const playScript = path.join(ROOT, 'scripts', 'play.mjs');
+    process.stdout.write(
+      `Run this command in a fresh terminal tab:\n\n` +
+      `  node ${playScript}\n\n` +
+      `Controls: WASD/arrows move \xB7 SPACE use \xB7 F fire \xB7 1-7 weapons \xB7 ESC menu \xB7 Q quit\n`,
+    );
+    break;
+  }
+
   default: {
     process.stdout.write([
       'afk-arcade control CLI',
@@ -158,6 +170,7 @@ switch (cmd) {
       '  rows <N>             — set banner height (2..15 rows)',
       '  aspect <4:3|16:10|stretch> — set DOOM frame aspect ratio (default: 4:3)',
       '  fetch-doom           — download DOOM WASM assets into vendor/doom/',
+      '  play                 — print the command to play DOOM in a fresh terminal',
     ].join('\n') + '\n');
     break;
   }

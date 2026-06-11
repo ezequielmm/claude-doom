@@ -56,6 +56,41 @@ Restart Claude Code. The `SessionStart` hook writes `statusline.sh` automaticall
 /afk aspect <4:3|16:10|stretch> — DOOM frame aspect ratio (default: 4:3)
 ```
 
+## Play it for real
+
+Play DOOM fullscreen in your terminal — not the attract-mode daemon, but a fully interactive game:
+
+```sh
+# Fetch WASM assets first (if you haven't already)
+node scripts/fetch-doom.mjs
+
+# Then start the player in any terminal
+node scripts/play.mjs
+```
+
+Or via the control CLI (prints the command to copy into a fresh tab):
+
+```
+/afk play
+```
+
+Controls:
+
+| Key | Action |
+|-----|--------|
+| `W` / `↑` | Move forward |
+| `S` / `↓` | Move back |
+| `A` / `←` | Turn left |
+| `D` / `→` | Turn right |
+| `SPACE` | Use (open doors) |
+| `F` or `X` | Fire |
+| `1`–`7` | Switch weapon |
+| `ESC` | Menu |
+| `ENTER` / `TAB` | Menu navigation |
+| `Q` or `Ctrl+C` | Quit |
+
+See [ROADMAP.md](./ROADMAP.md) for planned extensions: NES / Game Boy emulators and a Wide-Banner Game SDK.
+
 ## Phase B — DOOM WASM daemon
 
 Real DOOM (doomgeneric compiled to WebAssembly) runs in a detached sidecar process, rendering the attract/demo mode as ANSI half-block art in your statusline.

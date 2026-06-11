@@ -13,6 +13,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { runDoomTests } from './doom.test.mjs';
+import { runPlayTests } from './play.test.mjs';
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -313,11 +314,18 @@ cleanupSession(TEST_SESSION);
 
 // ── Phase B: doom tests (async, skips cleanly if vendor assets absent) ────────
 
-// Wrap counters as boxed objects so runDoomTests can increment them
+// Wrap counters as boxed objects so runDoomTests / runPlayTests can increment them
 const counters = { passed: { value: passed }, failed: { value: failed } };
 await runDoomTests(counters, { test });
 passed = counters.passed.value;
 failed = counters.failed.value;
+
+// ── Phase C: play tests (async, selftest skips if vendor assets absent) ───────
+
+const playCounters = { passed: { value: passed }, failed: { value: failed } };
+await runPlayTests(playCounters, { test });
+passed = playCounters.passed.value;
+failed = playCounters.failed.value;
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 

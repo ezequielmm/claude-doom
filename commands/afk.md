@@ -29,6 +29,7 @@ node "<pluginRoot>/scripts/afk-ctl.mjs" $ARGUMENTS
 - `/afk rows <N>` — set banner height (2–15 rows)
 - `/afk aspect <4:3|16:10|stretch>` — set DOOM frame aspect ratio (default: `4:3` — authentic CRT look, centered with pillarbox gutters; `stretch` restores full-width legacy behavior)
 - `/afk fetch-doom` — download DOOM WASM assets into vendor/doom/ (required before game doom)
+- `/afk play` — print the command to copy into a fresh terminal to play DOOM fullscreen
 
 **Phase B first-time setup:**
 
@@ -39,3 +40,13 @@ node "<pluginRoot>/scripts/afk-ctl.mjs" $ARGUMENTS
 
 The daemon starts automatically when the statusline first renders in doom mode.
 Switch back with `/afk game fire` — the daemon stops within 10 minutes.
+
+**Play DOOM fullscreen in your terminal:**
+
+```
+/afk play
+```
+
+This prints the exact command to copy into a fresh terminal tab. Paste and run it there — Claude Code's own terminal cannot be taken over by the player.
+
+Controls: `WASD` / arrow keys move · `SPACE` use · `F` fire · `1`–`7` weapons · `ESC` menu · `Q` quit.
