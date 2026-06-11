@@ -32,8 +32,10 @@ const VENDOR_DOOM = path.join(ROOT, 'vendor', 'doom');
 function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
 
 function printConfig(cfg) {
+  const backdropFps = cfg.backdropFps ?? 24;
+  const bot = cfg.bot ?? false;
   process.stdout.write(
-    `afk-arcade: game=${cfg.game} rows=${cfg.rows} aspect=${cfg.aspect ?? '4:3'} style=${cfg.style ?? 'quad'} enabled=${cfg.enabled}\n`,
+    `afk-arcade: game=${cfg.game} rows=${cfg.rows} aspect=${cfg.aspect ?? '4:3'} style=${cfg.style ?? 'quad'} enabled=${cfg.enabled} backdropFps=${backdropFps} bot=${bot}\n`,
   );
 }
 
@@ -176,21 +178,54 @@ switch (cmd) {
   }
 
   case 'backdrop': {
-    const value = args[1];
+    const sub = args[1];
+    if (sub === 'fps') {
+      // backdrop fps <N>
+      const raw = parseInt(args[2], 10);
+      if (isNaN(raw)) {
+        process.stdout.write(`afk-arcade: usage: backdrop fps <5..35>\n`);
+        process.exit(1);
+      }
+      const fps = Math.min(35, Math.max(5, raw));
+      writeConfig({ backdropFps: fps });
+      printConfig({ ...cfg, backdropFps: fps });
+      break;
+    }
+    const value = sub;
     if (!['on', 'off'].includes(value)) {
       process.stdout.write(
-        `afk-arcade: usage: backdrop <on|off>\n` +
-        '  on  — the darkened game frame becomes the WHOLE terminal background\n' +
-        '        (kitty graphics z=-2 under-text layer; Claude Code UI floats on top;\n' +
-        '        verified in Warp). The banner collapses to a single HUD line.\n' +
-        '  off — remove the backdrop image and restore the normal banner\n',
+        `afk-arcade: usage: backdrop <on|off|fps <5..35>>\n` +
+        '  on          — the darkened game frame becomes the WHOLE terminal background\n' +
+        '                (daemon streams at backdropFps; kitty z=-2; Claude Code UI floats on top;\n' +
+        '                verified in Warp). The banner collapses to a single HUD line.\n' +
+        '  off         — remove the backdrop image and restore the normal banner\n' +
+        '  fps <5..35> — set backdrop streaming fps (default: 24; DOOM tic rate cap: 35)\n',
       );
       process.exit(1);
     }
     writeConfig({ backdrop: value === 'on' });
     printConfig({ ...cfg, backdrop: value === 'on' });
     if (value === 'on') {
-      process.stdout.write('Backdrop enabled — give the daemon a few seconds to bake the first frame.\n');
+      process.stdout.write('Backdrop enabled — the daemon will stream at backdropFps (see /afk status).\n');
+    }
+    break;
+  }
+
+  case 'bot': {
+    const value = args[1];
+    if (!['on', 'off'].includes(value)) {
+      process.stdout.write(
+        `afk-arcade: usage: bot <on|off>\n` +
+        '  on  — heuristic bot plays DOOM: calm autopilot while you type,\n' +
+        '        ramps up aggression while Claude is in working state.\n' +
+        '  off — disable bot (engine runs attract demo)\n',
+      );
+      process.exit(1);
+    }
+    writeConfig({ bot: value === 'on' });
+    printConfig({ ...cfg, bot: value === 'on' });
+    if (value === 'on') {
+      process.stdout.write('Bot enabled — restart the daemon (/afk game doom) for it to take effect.\n');
     }
     break;
   }
@@ -337,11 +372,14 @@ switch (cmd) {
       '  status               — show current config and active sessions',
       '  on / off             — enable or disable the banner',
       '  game fire            — switch to DOOM fire effect',
-      '  game doom            — switch to DOOM WASM daemon frame (Phase B)',
+      '  game doom            — switch to DOOM WASM daemon frame',
       '  rows <N>             — set banner height (2..40 rows)',
       '  aspect <4:3|16:10|stretch> — set DOOM frame aspect ratio (default: 4:3)',
       '  backdrop <on|off>    — game as the WHOLE terminal background (kitty z=-2),',
-      '                         Claude Code UI floats on top; banner becomes HUD-only',
+      '                         daemon streams at backdropFps; banner becomes HUD-only',
+      '  backdrop fps <5..35> — set backdrop streaming fps (default: 24)',
+      '  bot <on|off>         — heuristic bot plays DOOM: calm autopilot while typing,',
+      '                         aggressive "claude is playing" while Claude is working',
       '  style <quad|half|pixel>',
       '                       — set render style: quad (2×2 blocks, default), half (▀ classic),',
       '                         or pixel (EXPERIMENTAL kitty Unicode placeholder banner)',

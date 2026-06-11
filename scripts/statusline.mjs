@@ -13,10 +13,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { readConfig, resolveSessionState, TMP_ROOT } from '../lib/state.mjs';
+import { readConfig, resolveSessionState, TMP_ROOT, readJson } from '../lib/state.mjs';
+import { upsertTtyRegistry, removeTtyEntry } from '../lib/registry.mjs';
 import { createFire, stepFire, heatToRgb, saveFire, loadFire } from '../lib/fire.mjs';
 import { renderHalfBlocks, renderQuadrants } from '../lib/render.mjs';
-import { kittyVirtualImage, kittyPlaceholderLines, kittyBackdropImage, kittyDeleteImage } from '../lib/gfx-protocol.mjs';
+import { kittyVirtualImage, kittyPlaceholderLines, kittyDeleteImage } from '../lib/gfx-protocol.mjs';
 import { debugEnabled, dbgLog } from '../lib/debug.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -94,9 +95,10 @@ const SGR = {
  * @param {object|undefined} params.ctxObj
  * @param {number} params.width
  * @param {string|undefined} params.extraSuffix
+ * @param {{ playing: boolean, aggressive: boolean }|null} [params.botStatus]
  * @returns {string}  ANSI-styled string, truncated to `width` visible chars.
  */
-function buildHudLine({ state, modelObj, ctxObj, width, extraSuffix }) {
+function buildHudLine({ state, modelObj, ctxObj, width, extraSuffix, botStatus }) {
   const modelName = modelObj?.display_name ?? modelObj?.id ?? 'claude';
   const usedPct = ctxObj?.used_percentage;
 
@@ -114,17 +116,33 @@ function buildHudLine({ state, modelObj, ctxObj, width, extraSuffix }) {
   } else {
     switch (state.mode) {
       case 'working':
-        statusColor = SGR.fgOrng;
-        statusPart = `${statusColor}claude is working — go grab a coffee${SGR.reset}`;
+        // Check bot status: if bot is active and aggressive, show bot text
+        if (botStatus?.playing && botStatus?.aggressive) {
+          statusColor = SGR.fgOrng;
+          statusPart = `${statusColor}claude is playing — go grab a coffee ◈${SGR.reset}`;
+        } else {
+          statusColor = SGR.fgOrng;
+          statusPart = `${statusColor}claude is working — go grab a coffee${SGR.reset}`;
+        }
         break;
       case 'afk':
-        statusColor = SGR.fgCyan;
-        statusPart = `${statusColor}AFK · demo mode${SGR.reset}`;
+        if (botStatus?.playing) {
+          statusColor = SGR.fgCyan;
+          statusPart = `${statusColor}autopilot · type away${SGR.reset}`;
+        } else {
+          statusColor = SGR.fgCyan;
+          statusPart = `${statusColor}AFK · demo mode${SGR.reset}`;
+        }
         break;
       case 'idle':
       default:
-        statusColor = SGR.fgDimG;
-        statusPart = `${statusColor}done — waiting for you${SGR.reset}`;
+        if (botStatus?.playing) {
+          statusColor = SGR.fgCyan;
+          statusPart = `${statusColor}autopilot · type away${SGR.reset}`;
+        } else {
+          statusColor = SGR.fgDimG;
+          statusPart = `${statusColor}done — waiting for you${SGR.reset}`;
+        }
         break;
     }
   }
@@ -377,9 +395,10 @@ async function main() {
       // unrelated tty up the process tree and spray kitty escapes at it.
       const hasTerminalEnv = Boolean(process.env.TERM_PROGRAM || process.env.TERM);
 
-      // Backdrop OFF cleanup: if a backdrop image was previously transmitted
-      // (bookkeeping exists) delete it from the terminal and clear the record.
+      // Backdrop OFF cleanup: remove this session's registry entry and send
+      // a one-time kitty delete if we previously had a tty registered.
       if (config.backdrop !== true) {
+        // Legacy backdrop-tx bookkeeping cleanup (from pre-0.6 versions)
         const txJsonPath = path.join(TMP_ROOT, `backdrop-tx-${sessionId ?? 'global'}.json`);
         try {
           const txState = JSON.parse(fs.readFileSync(txJsonPath, 'utf8'));
@@ -392,62 +411,77 @@ async function main() {
           }
           fs.unlinkSync(txJsonPath);
         } catch { /* no leftover backdrop — nothing to do */ }
+
+        // Remove from daemon TTY registry
+        removeTtyEntry(sessionId ?? 'global');
       }
 
-      // ── Backdrop mode: the game becomes the WHOLE terminal's background ────
-      // Transmit the darkened full frame at kitty z=-2 (under-text layer,
-      // verified compositing in Warp): Claude Code's UI floats over the game.
+      // ── Backdrop mode: register this session's tty for daemon streaming ──
+      // The daemon reads the tty registry and sends kitty backdrop frames
+      // out-of-band at backdropFps (default 24fps).  The statusline only
+      // needs to UPSERT the registry entry; no image transmission here.
       // The visible banner collapses to the single HUD line.
       if (config.backdrop === true && !process.env.AFK_ARCADE_NO_PIXEL && hasTerminalEnv) {
-        diag.backdrop = { tx: null };
-        try {
-          const backdropPng = path.join(doomDir, 'backdrop.png');
-          const bdStat = fs.statSync(backdropPng);
-          if (Date.now() - bdStat.mtimeMs < 12000) {
-            // Per-session bookkeeping: each session discovers and caches ITS
-            // OWN ancestor tty — a shared file made concurrent sessions
-            // (e.g. Warp + Apple Terminal) clobber each other's tty path.
-            const txJsonPath = path.join(TMP_ROOT, `backdrop-tx-${sessionId ?? 'global'}.json`);
-            const txState = (() => {
-              try { return JSON.parse(fs.readFileSync(txJsonPath, 'utf8')); } catch { return {}; }
-            })();
+        diag.backdrop = { registry: null };
 
-            let ttyFd = -1;
-            let ttyPathUsed = null;
-            const tryOpen = (p) => {
-              try { ttyFd = fs.openSync(p, 'w'); ttyPathUsed = p; return true; } catch { return false; }
-            };
-            if (!tryOpen('/dev/tty')) {
-              if (!(typeof txState.ttyPath === 'string' && tryOpen(txState.ttyPath))) {
-                const discovered = discoverAncestorTty();
-                if (discovered) tryOpen(discovered);
-              }
-            }
+        // Discover this session's tty (use per-session cache file for discovery cache)
+        const txJsonPath = path.join(TMP_ROOT, `backdrop-tx-${sessionId ?? 'global'}.json`);
+        const txState = (() => {
+          try { return JSON.parse(fs.readFileSync(txJsonPath, 'utf8')); } catch { return {}; }
+        })();
 
-            if (ttyFd >= 0) {
-              if (bdStat.mtimeMs !== (txState.lastMtime ?? 0)) {
-                const fullCols = parseInt(process.env.COLUMNS, 10) || 80;
-                const fullRows = parseInt(process.env.LINES, 10) || 24;
-                const pngBuf = fs.readFileSync(backdropPng);
-                const txStr = kittyBackdropImage(pngBuf, { imageId: 77, cols: fullCols, rows: fullRows });
-                fs.writeSync(ttyFd, txStr);
-                diag.backdrop.tx = { sent: true, bytes: txStr.length };
-                try {
-                  const t = txJsonPath + '.tmp';
-                  fs.writeFileSync(t, JSON.stringify({ lastMtime: bdStat.mtimeMs, ttyPath: ttyPathUsed }), 'utf8');
-                  fs.renameSync(t, txJsonPath);
-                } catch { /* non-fatal */ }
-              } else {
-                diag.backdrop.tx = { sent: false, skip: 'mtime-unchanged' };
-              }
-              fs.closeSync(ttyFd);
-            }
+        let ttyPathUsed = null;
+        const tryFindTty = (p) => {
+          try { fs.openSync(p, 'w'); fs.closeSync(fs.openSync(p, 'w')); ttyPathUsed = p; return true; } catch { return false; }
+        };
+        // Try in order: /dev/tty → cached tty → discover via ps-walk
+        // We only need to know the path is usable; we don't write here
+        const tryProbe = (p) => {
+          try {
+            const fd = fs.openSync(p, 'w');
+            fs.closeSync(fd);
+            ttyPathUsed = p;
+            return true;
+          } catch { return false; }
+        };
+        if (!tryProbe('/dev/tty')) {
+          if (!(typeof txState.ttyPath === 'string' && txState.ttyPath !== '/dev/tty' && tryProbe(txState.ttyPath))) {
+            const discovered = discoverAncestorTty();
+            if (discovered) tryProbe(discovered);
           }
-        } catch { /* backdrop.png missing — daemon still warming */ }
+        }
+
+        if (ttyPathUsed) {
+          const fullCols = parseInt(process.env.COLUMNS, 10) || 80;
+          const fullLines = parseInt(process.env.LINES, 10) || 24;
+          const sid = sessionId ?? 'global';
+          upsertTtyRegistry(sid, { ttyPath: ttyPathUsed, cols: fullCols, lines: fullLines });
+          diag.backdrop.registry = { sid, ttyPath: ttyPathUsed, cols: fullCols, lines: fullLines };
+
+          // Persist tty cache so next invocation can skip discovery
+          try {
+            const t = txJsonPath + '.tmp';
+            fs.writeFileSync(t, JSON.stringify({ ttyPath: ttyPathUsed }), 'utf8');
+            fs.renameSync(t, txJsonPath);
+          } catch { /* non-fatal */ }
+        }
+
+        // Read bot status for HUD
+        const botStatusPath = path.join(TMP_ROOT, 'doom', 'bot-status.json');
+        const botStatus = (() => {
+          try {
+            const bs = readJson(botStatusPath, null);
+            if (bs && typeof bs.playing === 'boolean') {
+              const age = Date.now() - (bs.updatedAt ?? 0);
+              return age < 5000 ? bs : null;
+            }
+            return null;
+          } catch { return null; }
+        })();
 
         const hudOnly = buildHudLine({
           state, modelObj: json.model, ctxObj: json.context_window,
-          width, extraSuffix: 'backdrop',
+          width, extraSuffix: 'backdrop', botStatus,
         }) + '\n';
         process.stdout.write(hudOnly);
         exitWithDiag(hudOnly, 'backdrop');
@@ -596,12 +630,26 @@ async function main() {
 
       // Quad / half / pixel-fallback path: use frame.ans text content.
       try {
+        // Read bot status for HUD (fresh <5s)
+        const botStatusPath2 = path.join(TMP_ROOT, 'doom', 'bot-status.json');
+        const botStatus2 = (() => {
+          try {
+            const bs = readJson(botStatusPath2, null);
+            if (bs && typeof bs.playing === 'boolean') {
+              const age = Date.now() - (bs.updatedAt ?? 0);
+              return age < 5000 ? bs : null;
+            }
+            return null;
+          } catch { return null; }
+        })();
+
         const hudLine = buildHudLine({
           state,
           modelObj: json.model,
           ctxObj: json.context_window,
           width,
           extraSuffix: undefined,
+          botStatus: botStatus2,
         });
         const frameContent = fs.readFileSync(doomFrame, 'utf8');
         const doomOut = hudLine + '\n' + frameContent + '\n';

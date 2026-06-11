@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License" /></a>
-  <img src="https://img.shields.io/badge/version-0.4.1-informational" alt="version 0.4.1" />
+  <img src="https://img.shields.io/badge/version-0.6.0-informational" alt="version 0.6.0" />
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen" alt="Node >= 20" />
   <img src="https://img.shields.io/badge/dependencies-zero-success" alt="Zero dependencies" />
   <img src="https://img.shields.io/badge/Claude%20Code-%3E%3D2.1.153-blueviolet" alt="Claude Code >= 2.1.153" />
@@ -201,13 +201,38 @@ Switch styles at any time:
 ### Backdrop mode — the game as your terminal's background
 
 `/afk backdrop on` turns the darkened DOOM frame into the **background of the whole
-terminal**: the frame is transmitted out-of-band to the session's tty as a kitty
-graphics placement with a negative z-index (`z=-2`), so the terminal composites the
-game UNDER Claude Code's UI — your conversation floats over DOOM, animated, while the
-banner collapses to a single HUD line. Verified live in Warp. Requires a terminal with
-kitty graphics support (Warp, kitty, WezTerm, Ghostty); terminals without it (e.g.
-Apple Terminal) silently ignore the image — use `/afk backdrop off` there. Darkening
-is tunable via the `backdropDim` config key (default `0.4`).
+terminal**: the daemon streams kitty graphics frames (z=-2 negative z-index) directly
+to each registered session tty at game-native framerate, so the terminal composites the
+game UNDER Claude Code's UI — your conversation floats over DOOM, animated. The banner
+collapses to a single HUD line. Verified live in Warp.
+
+**Streaming fps**: the daemon pushes frames at `backdropFps` (default `24`, clamped
+`5..35`; DOOM's internal tic rate is 35fps). Tune it with `/afk backdrop fps <N>`.
+
+Requires a terminal with kitty graphics support (Warp, kitty, WezTerm, Ghostty);
+terminals without it silently ignore the image — use `/afk backdrop off`. Darkening is
+tunable via the `backdropDim` config key (default `0.4`).
+
+### The bot
+
+`/afk bot on` enables a **pixel-heuristic autopilot** that plays DOOM while the banner
+runs in daemon mode. It's the demo that keeps the game alive and interesting while you
+work:
+
+- **While you type** (idle/afk session state): calm autopilot — holds forward, random
+  wander turns, fires on monster sightings, presses USE every ~4s to open doors.
+- **While Claude is working** (working session state): the bot ramps up aggression —
+  fires more eagerly (threshold halved), turns more frequently, and adds periodic
+  forward+fire rushes. The HUD shows *"claude is playing — go grab a coffee ◈"*.
+
+The bot is a pure pixel reader — it samples the framebuffer to detect the HUD strip
+(in-game vs title screen), monster presence (fleshy-pixel heuristic in the center
+region), and stuck states (unchanged center signature). No game-state injection.
+
+```sh
+/afk bot on    # enable (takes effect after daemon restarts)
+/afk bot off   # disable (engine returns to attract demo)
+```
 
 ### Pixel banner (U=1 placeholders)
 
@@ -259,6 +284,9 @@ AFK_ARCADE_NO_PIXEL=1 # set in your environment
 | `/afk rows <N>` | Banner height, 2–30 rows |
 | `/afk aspect <4:3\|16:10\|stretch>` | Frame aspect ratio (default: `4:3`) |
 | `/afk style <quad\|half\|pixel>` | Renderer style: `quad` (default), `half` (classic `▀`), or `pixel` (experimental) |
+| `/afk backdrop <on\|off>` | Game as terminal background (kitty z=-2); banner collapses to HUD |
+| `/afk backdrop fps <5..35>` | Streaming fps for backdrop mode (default: `24`) |
+| `/afk bot <on\|off>` | Heuristic bot pilot: calm autopilot while typing, aggressive while Claude works |
 | `/afk play` | Launch DOOM in a Warp tab (macOS + Warp installed); otherwise print the command |
 | `/afk fetch-doom` | Download DOOM WASM assets into `vendor/` |
 | `/afk setup [--yes] [--no-iterm]` | Guided installer — wires statusline, downloads assets, offers iTerm2 |
@@ -276,6 +304,10 @@ AFK_ARCADE_NO_PIXEL=1 # set in your environment
 | `rows` | `5` | Banner height in terminal rows |
 | `aspect` | `"4:3"` | DOOM frame aspect ratio |
 | `style` | `"quad"` | Renderer style: `quad` (adaptive 2×2 blocks), `half` (classic `▀`), or `pixel` (experimental — see below) |
+| `backdrop` | `false` | Daemon-side backdrop streaming (kitty z=-2) |
+| `backdropDim` | `0.4` | Backdrop darkening factor (0.1–1.0) |
+| `backdropFps` | `24` | Backdrop streaming fps (5–35; DOOM tic cap is 35) |
+| `bot` | `false` | Heuristic bot player |
 
 Edit the file directly or use `/afk` commands — they write through immediately.
 

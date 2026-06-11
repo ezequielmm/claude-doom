@@ -6,6 +6,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.6.0] — 2026-06-11
+
+### Added
+- **Daemon-side backdrop streaming** — the daemon now pushes kitty backdrop
+  frames directly to each registered tty at game-native framerate instead of
+  waiting for the statusline to pull them.  The statusline only upserts its
+  tty into `TMP_ROOT/tty-registry.json` (atomic read-modify-write); the daemon
+  reads the registry at most every 1000ms, prunes stale entries (>30s), and
+  sends a fresh kitty-z=-2 frame to every live tty on each streaming tick.
+- **`backdropFps` config** (default `24`, clamped `5..35`) — controls the
+  daemon streaming rate.  DOOM's internal tic rate is 35fps; values above that
+  are clamped.  Set with `/afk backdrop fps <N>`.
+- **`/afk backdrop fps <5..35>`** — new sub-command to tune streaming fps.
+- **Heuristic bot** (`lib/doom-bot.mjs`) — pixel-heuristic autopilot that
+  drives the engine via `pushKey` without any `setInterval`.  Behavior:
+  - **Not in-game**: detects title/attract screen (bottom 12% frame analysis)
+    and sends ENTER sequences to start a new game; retries every 8s.
+  - **In-game calm** (`aggressive=false`): holds FORWARD most of the time;
+    random wander turns every 1.2–2.5s; fires in bursts on fleshy-pixel
+    monster detection (>8% of sampled center region); USE every 4s; ENTER
+    every 10s; stuck detection (center unchanged >1.6s) triggers an unstick
+    turn.
+  - **In-game aggressive** (`aggressive=true`): fires on >4% monster signal
+    (twice as trigger-happy), wander turns every 0.8–1.5s, periodic
+    forward+fire rush every 5s.
+- **`/afk bot on|off`** — enable/disable the heuristic bot.
+- **Aggressive mode trigger**: daemon reads session state files at most every
+  1000ms; `aggressive=true` when any session has `mode='working'` with
+  `updatedAt` within the last 15s.
+- **Bot status HUD**: daemon writes `TMP_ROOT/doom/bot-status.json` (atomic,
+  ~1s cadence); statusline reads it (fresh <5s) and shows:
+  - Working + bot aggressive → `"claude is playing — go grab a coffee ◈"`
+  - Bot active (any mode) → `"autopilot · type away"`
+- **`lib/registry.mjs`** — extracted TTY registry helpers (`upsertTtyRegistry`,
+  `removeTtyEntry`, `readRegistry`, `pruneRegistry`, `REGISTRY_TTL_MS`) for
+  unit testability.
+- **`test/bot.test.mjs`** — 7 tests: start-sequence ENTER taps, FORWARD held
+  on in-game frame, FIRE burst on monster signal, stuck-detection turn+release,
+  aggressive vs calm threshold behavioral difference, registry upsert format,
+  and pruneRegistry stale-entry removal.  Wired into `test/run.mjs` as Phase F.
+
 ## [0.5.0] — 2026-06-11
 
 ### Added

@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="../../LICENSE"><img src="https://img.shields.io/badge/licencia-MIT-blue.svg" alt="Licencia MIT" /></a>
-  <img src="https://img.shields.io/badge/versión-0.4.1-informational" alt="versión 0.4.1" />
+  <img src="https://img.shields.io/badge/versión-0.6.0-informational" alt="versión 0.6.0" />
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen" alt="Node >= 20" />
   <img src="https://img.shields.io/badge/dependencias-cero-success" alt="Cero dependencias" />
   <img src="https://img.shields.io/badge/Claude%20Code-%3E%3D2.1.153-blueviolet" alt="Claude Code >= 2.1.153" />
@@ -196,6 +196,37 @@ Cambiá el estilo en cualquier momento:
 
 ---
 
+## Modo backdrop — el juego como fondo de tu terminal
+
+`/afk backdrop on` convierte el frame oscurecido de DOOM en el **fondo de toda la
+terminal**: el daemon transmite frames kitty (z=-2 índice z negativo) directamente
+al tty de cada sesión registrada a fps nativos del juego, para que el terminal
+composita el juego DEBAJO de la UI de Claude Code. El banner colapsa a una sola
+línea HUD. Verificado en Warp.
+
+**Fps de streaming**: configurable con `/afk backdrop fps <N>` (predeterminado `24`,
+rango `5..35`; el tic rate interno de DOOM es 35fps). El oscurecimiento se controla
+con `backdropDim` (predeterminado `0.4`).
+
+## El bot
+
+`/afk bot on` activa un **piloto automático pixel-heurístico** que juega DOOM mientras
+el banner está activo en modo daemon:
+
+- **Mientras escribís** (estado idle/afk): piloto tranquilo — avanza, gira al azar,
+  dispara al detectar monstruos (heurística de píxeles "carnosos" en el centro del frame),
+  presiona USE cada ~4s para abrir puertas.
+- **Mientras Claude trabaja** (estado working): el bot se vuelve más agresivo — dispara
+  con el doble de facilidad, gira más seguido, y agrega embestidas periódicas. El HUD
+  muestra *"claude is playing — go grab a coffee ◈"*.
+
+```sh
+/afk bot on    # activar (efecto al reiniciar el daemon)
+/afk bot off   # desactivar (el engine vuelve al demo attract)
+```
+
+---
+
 ## Experimental: banner pixel (placeholders Unicode de kitty)
 
 `/afk style pixel` activa un modo experimental que renderiza el banner de DOOM como una **imagen PNG real dentro del statusline de Claude Code** usando el [protocolo gráfico de kitty con Unicode placeholders](https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders) (virtual placements U=1).
@@ -242,6 +273,9 @@ AFK_ARCADE_NO_PIXEL=1 # en tu entorno
 | `/afk rows <N>` | Altura del banner, 2–30 filas |
 | `/afk aspect <4:3\|16:10\|stretch>` | Relación de aspecto del frame (predeterminado: `4:3`) |
 | `/afk style <quad\|half\|pixel>` | Estilo del renderer: `quad` (predeterminado), `half` (clásico `▀`), o `pixel` (experimental) |
+| `/afk backdrop <on\|off>` | Juego como fondo de terminal (kitty z=-2); banner colapsa a HUD |
+| `/afk backdrop fps <5..35>` | Fps de streaming para backdrop (predeterminado: `24`) |
+| `/afk bot <on\|off>` | Bot heurístico: piloto tranquilo mientras escribís, agresivo mientras Claude trabaja |
 | `/afk debug on` | Activar log de diagnósticos JSONL en `~/.claude/afk-arcade/debug.log` |
 | `/afk debug off` | Desactivar diagnósticos |
 | `/afk debug tail [n]` | Imprimir las últimas `n` líneas del log (predeterminado: 30) |

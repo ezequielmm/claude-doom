@@ -16,6 +16,7 @@ import { runDoomTests } from './doom.test.mjs';
 import { runPlayTests } from './play.test.mjs';
 import { runRenderTests } from './render.test.mjs';
 import { runDebugTests } from './debug.test.mjs';
+import { runBotTests } from './bot.test.mjs';
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -360,6 +361,13 @@ const debugCounters = { passed: { value: passed }, failed: { value: failed } };
 await runDebugTests(debugCounters, { test });
 passed = debugCounters.passed.value;
 failed = debugCounters.failed.value;
+
+// ── Phase F: bot + registry unit tests ───────────────────────────────────────
+
+const botCounters = { passed: { value: passed }, failed: { value: failed } };
+await runBotTests(botCounters, { test });
+passed = botCounters.passed.value;
+failed = botCounters.failed.value;
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 

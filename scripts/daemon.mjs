@@ -15,24 +15,29 @@ import net from 'node:net';
 import path from 'node:path';
 import { createDoom } from '../lib/doom-engine.mjs';
 import { renderHalfBlocks, renderQuadrants } from '../lib/render.mjs';
-import { readConfig, TMP_ROOT } from '../lib/state.mjs';
+import { readConfig, resolveSessionState, TMP_ROOT, SESSION_DIR, readJson, writeJsonAtomic } from '../lib/state.mjs';
+import { readRegistry, pruneRegistry } from '../lib/registry.mjs';
 import { computeGameWidth, buildScaledBuffer, bufferGetPixel } from '../lib/scale.mjs';
 import { sharpen, toneLift } from '../lib/postfx.mjs';
 import { encodePngFast } from '../lib/png.mjs';
+import { kittyBackdropImage } from '../lib/gfx-protocol.mjs';
 import { debugEnabled, dbgLog } from '../lib/debug.mjs';
+import { createBot } from '../lib/doom-bot.mjs';
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
-const DOOM_TMP  = path.join(TMP_ROOT, 'doom');
-const PIDFILE   = path.join(DOOM_TMP, 'daemon.pid');
-const SOCKFILE  = path.join(DOOM_TMP, 'daemon.sock');
-const ERRFILE   = path.join(DOOM_TMP, 'daemon.err');
-const VIEWPORT  = path.join(DOOM_TMP, 'viewport.json');
-const FRAME_ANS = path.join(DOOM_TMP, 'frame.ans');
+const DOOM_TMP     = path.join(TMP_ROOT, 'doom');
+const PIDFILE      = path.join(DOOM_TMP, 'daemon.pid');
+const SOCKFILE     = path.join(DOOM_TMP, 'daemon.sock');
+const ERRFILE      = path.join(DOOM_TMP, 'daemon.err');
+const VIEWPORT     = path.join(DOOM_TMP, 'viewport.json');
+const FRAME_ANS    = path.join(DOOM_TMP, 'frame.ans');
 // Written only when style === 'pixel'; the statusline reads this for U=1 placement.
-const FRAME_PNG = path.join(DOOM_TMP, 'frame.png');
+const FRAME_PNG    = path.join(DOOM_TMP, 'frame.png');
 // Written only when backdrop === true; darkened full frame for the z=-2 layer.
 const BACKDROP_PNG = path.join(DOOM_TMP, 'backdrop.png');
+// Written when bot === true; statusline reads for HUD text.
+const BOT_STATUS   = path.join(DOOM_TMP, 'bot-status.json');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -193,11 +198,25 @@ async function main() {
   // Tick interval (~30ms → ~33fps internal pacing)
   const TICK_INTERVAL_MS = 30;
 
-  // Frame write interval (~1000ms)
-  // 4 frames/s: the statusline polls ~1/s out of phase with our writes, so a
-  // 1s write interval served frames up to ~2s stale. Writing at 250ms keeps
-  // every poll fresh (≤250ms old) for a consistent perceived cadence.
+  // Frame write interval (~250ms) — statusline polls ~1/s; 250ms keeps frames fresh.
   const FRAME_INTERVAL_MS = 250;
+
+  // Backdrop streaming cadence — driven by backdropFps config (5..35).
+  // Re-read from config at most every 1000ms.
+  let lastStreamAt = 0;
+  let streamInterval = Math.round(1000 / 24); // default 24fps
+  let lastRegistryReadAt = 0;
+  let cachedRegistry = {};
+  let streamFrameCount = 0;
+
+  // Bot status write cadence
+  const BOT_STATUS_INTERVAL_MS = 1000;
+  let lastBotStatusAt = 0;
+
+  // Session state read cadence (for bot aggressive mode)
+  const SESSION_STATE_INTERVAL_MS = 1000;
+  let lastSessionStateAt = 0;
+  let cachedIsAggressive = false;
 
   let lastFrameAt = 0;
   let tickCount = 0;
@@ -218,12 +237,68 @@ async function main() {
   // Read config once for debug gating (re-read inside writeFrame for style)
   const _initCfg = readConfig();
 
+  // ── Bot setup ─────────────────────────────────────────────────────────────
+  let bot = null;
+  if (_initCfg.bot === true && _initCfg.game === 'doom') {
+    try {
+      bot = createBot(engine);
+    } catch {
+      // Bot creation failed — continue without bot
+    }
+  }
+
+  // Backdrop streaming constants
+  const BACKDROP_W = 640;
+  const BACKDROP_H = 400;
+
   const tickTimer = setInterval(() => {
     try {
       engine.tick();
       tickCount++;
 
       const now = Date.now();
+
+      // ── Bot update (every tick) ────────────────────────────────────────
+      if (bot) {
+        // Refresh aggressive state at most every SESSION_STATE_INTERVAL_MS
+        if (now - lastSessionStateAt >= SESSION_STATE_INTERVAL_MS) {
+          lastSessionStateAt = now;
+          try {
+            // Check if any session file has mode='working' fresh <15s
+            const files = fs.readdirSync(SESSION_DIR).filter(f => f.endsWith('.json'));
+            let aggressive = false;
+            for (const f of files) {
+              const data = readJson(path.join(SESSION_DIR, f), null);
+              if (data && data.mode === 'working' && typeof data.updatedAt === 'number') {
+                if (now - data.updatedAt < 15_000) {
+                  aggressive = true;
+                  break;
+                }
+              }
+            }
+            cachedIsAggressive = aggressive;
+          } catch {
+            // SESSION_DIR may not exist — treat as non-aggressive
+          }
+        }
+
+        try {
+          bot.update(now, cachedIsAggressive);
+        } catch { /* bot error — keep ticking */ }
+
+        // Write bot-status.json at ~1s cadence
+        if (now - lastBotStatusAt >= BOT_STATUS_INTERVAL_MS) {
+          lastBotStatusAt = now;
+          try {
+            writeJsonAtomic(BOT_STATUS, {
+              playing: true,
+              aggressive: cachedIsAggressive,
+              updatedAt: now,
+            });
+          } catch { /* non-fatal */ }
+        }
+      }
+
       if (now - lastFrameAt >= FRAME_INTERVAL_MS) {
         lastFrameAt = now;
         frameCount++;
@@ -240,6 +315,7 @@ async function main() {
           let usurped = false;
           try { usurped = fs.statSync(SOCKFILE).ino !== ownedSockIno; } catch { usurped = true; }
           if (usurped) {
+            if (bot) { try { bot.dispose(); } catch {} }
             clearInterval(tickTimer);
             process.exit(0);
           }
@@ -252,13 +328,106 @@ async function main() {
           lastSignatureChangeAt = now;
         } else if (now - lastSignatureChangeAt > STALE_OUTPUT_MS) {
           try { dbgLog('daemon', { recycle: 'stale-output', frame: frameCount }); } catch { /* ignore */ }
+          if (bot) { try { bot.dispose(); } catch {} }
           clearInterval(tickTimer);
           process.exit(0);
         }
         if (now - bootedAt > LIFETIME_MS) {
           try { dbgLog('daemon', { recycle: 'lifetime-cap', frame: frameCount }); } catch { /* ignore */ }
+          if (bot) { try { bot.dispose(); } catch {} }
           clearInterval(tickTimer);
           process.exit(0);
+        }
+      }
+
+      // ── Daemon-side backdrop streaming ────────────────────────────────
+      // Re-read backdropFps from config cache on registry refresh cadence.
+      const cfg = readConfig();
+      if (cfg.backdrop === true) {
+        // Recompute interval from config (clamped 5..35fps)
+        const fps = typeof cfg.backdropFps === 'number'
+          ? Math.min(35, Math.max(5, cfg.backdropFps))
+          : 24;
+        streamInterval = Math.round(1000 / fps);
+
+        if (now - lastStreamAt >= streamInterval) {
+          lastStreamAt = now;
+
+          // Refresh registry cache at most every 1000ms
+          if (now - lastRegistryReadAt >= 1000) {
+            lastRegistryReadAt = now;
+            try {
+              const raw = readRegistry();
+              cachedRegistry = pruneRegistry(raw, now);
+            } catch {
+              cachedRegistry = {};
+            }
+          }
+
+          const ttyEntries = Object.entries(cachedRegistry);
+          if (ttyEntries.length > 0) {
+            // Build backdrop PNG once per streaming frame
+            const dim = typeof cfg.backdropDim === 'number'
+              ? Math.min(1, Math.max(0.1, cfg.backdropDim))
+              : 0.4;
+
+            let pngBuf = null;
+            let encodeMs = null;
+            try {
+              const t0Enc = Date.now();
+              // Use getFrameRGB (bulk HEAPU32) + bufferGetPixel for fast scaling.
+              // getFrameRGB gives us the full framebuffer in ~1.5ms vs ~70ms
+              // for per-pixel getValue calls.
+              const fullRgb = engine.getFrameRGB();
+              const fastPixel = bufferGetPixel(fullRgb, engine.width);
+              const rgb = buildScaledBuffer(
+                fastPixel, engine.width, engine.height, BACKDROP_W, BACKDROP_H,
+              );
+              // Dim in-place
+              for (let i = 0; i < rgb.length; i++) {
+                rgb[i] = (rgb[i] * dim) | 0;
+              }
+              pngBuf = encodePngFast(rgb, BACKDROP_W, BACKDROP_H);
+              encodeMs = Date.now() - t0Enc;
+            } catch {
+              // Encoding failed — skip this streaming tick
+            }
+
+            if (pngBuf) {
+              streamFrameCount++;
+              for (const [_sid, entry] of ttyEntries) {
+                try {
+                  const txStr = kittyBackdropImage(pngBuf, {
+                    imageId: 77,
+                    cols: entry.cols,
+                    rows: entry.lines,
+                  });
+                  const fd = fs.openSync(entry.ttyPath, 'w');
+                  fs.writeSync(fd, txStr);
+                  fs.closeSync(fd);
+                } catch {
+                  // Write failed — statusline will re-register or prune on next poll
+                }
+              }
+
+              // Telemetry: every ~100th streamed frame
+              if (debugEnabled(cfg) && streamFrameCount % 100 === 0) {
+                const achievedFps = streamFrameCount > 1
+                  ? Math.round(1000 / streamInterval)
+                  : 0;
+                try {
+                  dbgLog('daemon', {
+                    stream: {
+                      fps: achievedFps,
+                      ttys: ttyEntries.length,
+                      pngBytes: pngBuf.length,
+                      encodeMs,
+                    },
+                  });
+                } catch { /* ignore */ }
+              }
+            }
+          }
         }
       }
     } catch {
