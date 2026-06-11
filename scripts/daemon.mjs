@@ -15,6 +15,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { createDoom } from '../lib/doom-engine.mjs';
 import { renderHalfBlocks } from '../lib/render.mjs';
+import { readConfig } from '../lib/state.mjs';
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -114,24 +115,85 @@ function readViewport() {
   }
 }
 
-// ── Nearest-neighbour scaler ──────────────────────────────────────────────────
+// ── Box-filter scaler ─────────────────────────────────────────────────────────
 
 /**
- * Build a getPixel function that nearest-neighbour-scales the DOOM framebuffer
- * to cols×pxRows terminal pixels.
+ * Compute game width from aspect ratio, pixel-row count, and available columns.
+ *
+ * Each "▀" half-block cell is approximately square because terminal cells are
+ * ~2:1 tall and we pack 2 pixel rows per cell.  A 4:3 image therefore needs
+ * gameW ≈ round(pxRows * 4/3).
+ *
+ * @param {'4:3'|'16:10'|'stretch'} aspect
+ * @param {number} pxRows  Total pixel height used for the game.
+ * @param {number} cols    Available terminal columns.
+ * @returns {number}  Game width in terminal columns (always ≤ cols).
+ */
+function computeGameWidth(aspect, pxRows, cols) {
+  if (aspect === 'stretch') return cols;
+  const ratio = aspect === '16:10' ? 1.6 : 4 / 3;
+  return Math.max(8, Math.min(cols, Math.round(pxRows * ratio)));
+}
+
+/**
+ * Build a pre-scaled RGB buffer using a box filter (area average) from the
+ * DOOM 320×200 framebuffer into a dstW×dstH pixel grid.
+ *
+ * For each destination pixel (x, y) the source rectangle
+ *   [x*srcW/dstW .. (x+1)*srcW/dstW) × [y*srcH/dstH .. (y+1)*srcH/dstH)
+ * is averaged.  Integer bounds are sufficient — at 36×30 target each pixel
+ * covers ~80 source samples; the quantisation error is imperceptible.
  *
  * @param {(x: number, y: number) => [number, number, number]} srcGetPixel
- * @param {number} srcW  Source framebuffer width
- * @param {number} srcH  Source framebuffer height
- * @param {number} dstW  Target pixel width (columns)
- * @param {number} dstH  Target pixel height (pxRows)
+ * @param {number} srcW
+ * @param {number} srcH
+ * @param {number} dstW
+ * @param {number} dstH
+ * @returns {Uint8Array}  Flat RGB buffer, row-major, 3 bytes per pixel.
+ */
+function buildScaledBuffer(srcGetPixel, srcW, srcH, dstW, dstH) {
+  const buf = new Uint8Array(dstW * dstH * 3);
+
+  for (let dy = 0; dy < dstH; dy++) {
+    // Source row range [y0, y1)
+    const y0 = Math.floor(dy * srcH / dstH);
+    const y1 = Math.max(y0 + 1, Math.floor((dy + 1) * srcH / dstH));
+
+    for (let dx = 0; dx < dstW; dx++) {
+      // Source column range [x0, x1)
+      const x0 = Math.floor(dx * srcW / dstW);
+      const x1 = Math.max(x0 + 1, Math.floor((dx + 1) * srcW / dstW));
+
+      let sumR = 0, sumG = 0, sumB = 0, count = 0;
+      for (let sy = y0; sy < y1; sy++) {
+        for (let sx = x0; sx < x1; sx++) {
+          const [r, g, b] = srcGetPixel(sx, sy);
+          sumR += r; sumG += g; sumB += b;
+          count++;
+        }
+      }
+
+      const base = (dy * dstW + dx) * 3;
+      buf[base]     = Math.round(sumR / count);
+      buf[base + 1] = Math.round(sumG / count);
+      buf[base + 2] = Math.round(sumB / count);
+    }
+  }
+
+  return buf;
+}
+
+/**
+ * Build a getPixel accessor over a flat RGB buffer with the given width.
+ *
+ * @param {Uint8Array} buf
+ * @param {number} bufW
  * @returns {(x: number, y: number) => [number, number, number]}
  */
-function makeScaler(srcGetPixel, srcW, srcH, dstW, dstH) {
+function bufferGetPixel(buf, bufW) {
   return (x, y) => {
-    const srcX = Math.min(srcW - 1, Math.floor(x / dstW * srcW));
-    const srcY = Math.min(srcH - 1, Math.floor(y / dstH * srcH));
-    return srcGetPixel(srcX, srcY);
+    const base = (y * bufW + x) * 3;
+    return [buf[base], buf[base + 1], buf[base + 2]];
   };
 }
 
@@ -226,24 +288,38 @@ async function main() {
 }
 
 /**
- * Write one scaled ANSI frame to FRAME_ANS.
+ * Write one aspect-correct, box-filtered ANSI frame to FRAME_ANS.
+ *
+ * Layout:
+ *   - gameW columns of DOOM content, horizontally centered within `cols`
+ *   - leftPad plain spaces on the left (no background color — terminal default shows through)
+ *   - no trailing spaces needed; the reset at end of each game line suffices
+ *
  * @param {{ getPixel: Function, width: number, height: number }} engine
  */
 function writeFrame(engine) {
   try {
-    const vp = readViewport();
+    const vp     = readViewport();
+    const cfg    = readConfig();
     const cols   = vp.cols;
     const pxRows = vp.pxRows % 2 === 0 ? vp.pxRows : vp.pxRows + 1; // must be even
 
-    const scaledGetPixel = makeScaler(
-      engine.getPixel,
-      engine.width,
-      engine.height,
-      cols,
-      pxRows,
-    );
+    const aspect  = cfg.aspect ?? '4:3';
+    const gameW   = computeGameWidth(aspect, pxRows, cols);
+    const leftPad = Math.floor((cols - gameW) / 2);
+    const pad     = leftPad > 0 ? ' '.repeat(leftPad) : '';
 
-    const lines = renderHalfBlocks(scaledGetPixel, cols, pxRows, { truecolor: vp.truecolor });
+    // Build the scaled RGB buffer using box-filter averaging
+    const scaledBuf     = buildScaledBuffer(engine.getPixel, engine.width, engine.height, gameW, pxRows);
+    const scaledGetPixel = bufferGetPixel(scaledBuf, gameW);
+
+    // Render game content as half-block lines
+    const gameLines = renderHalfBlocks(scaledGetPixel, gameW, pxRows, { truecolor: vp.truecolor });
+
+    // Prepend pillarbox padding (plain spaces, no color codes — gutters inherit terminal bg)
+    const RESET = '\x1b[0m';
+    const lines = gameLines.map(line => `${RESET}${pad}${line}`);
+
     writeAtomic(FRAME_ANS, lines.join('\n'));
   } catch {
     // Non-fatal — next tick will retry

@@ -48,11 +48,12 @@ Restart Claude Code. The `SessionStart` hook writes `statusline.sh` automaticall
 ## Usage
 
 ```
-/afk status        — show config + active session modes
-/afk on / off      — toggle banner
-/afk game fire     — DOOM PSX fire (default)
-/afk game doom     — DOOM WASM daemon frames (Phase B)
-/afk rows <N>      — banner height, 2–12 rows
+/afk status                    — show config + active session modes
+/afk on / off                  — toggle banner
+/afk game fire                 — DOOM PSX fire (default)
+/afk game doom                 — DOOM WASM daemon frames (Phase B)
+/afk rows <N>                  — banner height, 2–15 rows
+/afk aspect <4:3|16:10|stretch> — DOOM frame aspect ratio (default: 4:3)
 ```
 
 ## Phase B — DOOM WASM daemon
@@ -82,11 +83,26 @@ statusline.mjs (every ~1 s)
   │
 daemon.mjs  (singleton, runs in background)
   │  setInterval ~30ms → engine.tick()           (doomgeneric self-paces internally)
-  │  every ~1 s → reads viewport.json → nearest-neighbour scale 320×200 → cols×pxRows
+  │  every ~1 s → reads viewport.json + config.json
+  │             → computes gameW from aspect ratio (4:3 default: gameW=round(pxRows*4/3))
+  │             → box-filter scales 320×200 → gameW×pxRows (area-average, ~80 samples/px)
+  │             → centers game horizontally with plain-space pillarbox gutters
   │             → renderHalfBlocks → writes frame.ans atomically
   │  watchdog: if viewport.json > 10 min old → exit gracefully
   │  SIGTERM (from hook.mjs SessionEnd) → removes pidfile + exits
 ```
+
+### Aspect ratio
+
+DOOM's 320×200 framebuffer was displayed on 4:3 CRTs with tall pixels. The renderer uses `▀` half-blocks — one terminal cell per 2 pixel rows, making each pixel approximately square. The `aspect` setting controls how the game is scaled horizontally:
+
+| value     | gameW formula                  | effect                              |
+|-----------|--------------------------------|-------------------------------------|
+| `4:3`     | `round(pxRows * 4/3)` (default) | authentic CRT look, centered        |
+| `16:10`   | `round(pxRows * 1.6)`          | slightly wider, centered            |
+| `stretch` | full terminal width            | fills the banner, original behavior |
+
+The gutters are plain spaces with no background color so the terminal's own background shows through.
 
 ### Daemon lifecycle
 

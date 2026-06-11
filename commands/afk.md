@@ -26,7 +26,8 @@ node "<pluginRoot>/scripts/afk-ctl.mjs" $ARGUMENTS
 - `/afk off` — disable the banner
 - `/afk game fire` — switch to DOOM PSX fire effect
 - `/afk game doom` — switch to DOOM WASM daemon mode (auto-spawns daemon on first use)
-- `/afk rows <N>` — set banner height (2–12 rows)
+- `/afk rows <N>` — set banner height (2–15 rows)
+- `/afk aspect <4:3|16:10|stretch>` — set DOOM frame aspect ratio (default: `4:3` — authentic CRT look, centered with pillarbox gutters; `stretch` restores full-width legacy behavior)
 - `/afk fetch-doom` — download DOOM WASM assets into vendor/doom/ (required before game doom)
 
 **Phase B first-time setup:**

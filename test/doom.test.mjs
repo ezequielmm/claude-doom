@@ -6,8 +6,10 @@
  *
  * Tests:
  *   1. Engine boot — createDoom(), 120 ticks, 64×40 color sample > 50 distinct
- *   2. Daemon e2e  — spawn daemon.mjs, wait for frame.ans, SIGTERM, pidfile cleaned
+ *   2. Daemon e2e  — spawn daemon.mjs, wait for frame.ans, assert aspect-correct
+ *                    pillarbox layout (4:3 default: gameW≈27 for pxRows=20, leftPad centered)
  *   3. Statusline doom mode — config game=doom + fake frame.ans → frame content in output
+ *   4. Daemon stretch mode — set aspect=stretch, assert full-width content (no pillarbox)
  */
 
 import { spawnSync, spawn } from 'node:child_process';
@@ -107,9 +109,9 @@ tests.push({
   },
 });
 
-// Test 2: Daemon e2e
+// Test 2: Daemon e2e — aspect-correct 4:3 pillarbox layout
 tests.push({
-  name: 'doom daemon e2e — spawns, writes frame.ans with ▀ and ANSI, cleans up on SIGTERM',
+  name: 'doom daemon e2e — spawns, writes frame.ans with pillarbox centering (4:3, cols=80, pxRows=20)',
   async fn() {
     if (SKIP) return 'SKIP';
 
@@ -117,6 +119,8 @@ tests.push({
     const pidFile    = path.join(doomDir, 'daemon.pid');
     const frameFile  = path.join(doomDir, 'frame.ans');
     const viewportFile = path.join(doomDir, 'viewport.json');
+    const configDir  = path.join(os.homedir(), '.claude', 'afk-arcade');
+    const configFile = path.join(configDir, 'config.json');
 
     // Clean state
     for (const f of [pidFile, frameFile, viewportFile]) {
@@ -124,8 +128,22 @@ tests.push({
     }
     fs.mkdirSync(doomDir, { recursive: true });
 
-    // Write a viewport.json so the daemon doesn't bail on the watchdog
-    fs.writeFileSync(viewportFile, JSON.stringify({ cols: 40, pxRows: 10, truecolor: false }), 'utf8');
+    // Ensure config has aspect=4:3 (the default — write explicitly so it's definitive)
+    try {
+      fs.mkdirSync(configDir, { recursive: true });
+      const existing = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+      fs.writeFileSync(configFile, JSON.stringify({ ...existing, aspect: '4:3' }), 'utf8');
+    } catch {
+      // config may not exist — the daemon falls back to defaults (4:3)
+    }
+
+    // Write a viewport: cols=80, pxRows=20 → gameW = round(20 * 4/3) = 27
+    const COLS = 80;
+    const PX_ROWS = 20;
+    const EXPECTED_GAME_W = Math.round(PX_ROWS * 4 / 3); // 27
+    const EXPECTED_LEFT_PAD = Math.floor((COLS - EXPECTED_GAME_W) / 2); // 26
+
+    fs.writeFileSync(viewportFile, JSON.stringify({ cols: COLS, pxRows: PX_ROWS, truecolor: true }), 'utf8');
 
     // Spawn daemon
     const child = spawn(process.execPath, ['--no-warnings', DAEMON_SCRIPT], {
@@ -148,12 +166,54 @@ tests.push({
     }, 20_000, 300);
 
     if (!ok) {
-      // Cleanup anyway
       try { process.kill(child.pid, 'SIGTERM'); } catch { /* ignore */ }
       throw new Error(`frame.ans not written within 20s (deadline ${deadline})`);
     }
 
-    // Read pid from pidfile
+    // ── Layout assertions ──────────────────────────────────────────────────────
+    const frameContent = fs.readFileSync(frameFile, 'utf8');
+    const frameLines = frameContent.split('\n').filter(l => l.length > 0);
+
+    // Strip ANSI escape sequences for layout measurement
+    const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
+
+    // Every line must start with leading spaces (pillarbox gutter)
+    const firstLine = frameLines[0];
+    const firstStripped = stripAnsi(firstLine);
+    const leadingSpaces = firstStripped.length - firstStripped.trimStart().length;
+
+    if (leadingSpaces < 1) {
+      throw new Error(
+        `Expected leading pillarbox spaces, got none. First stripped line: ${JSON.stringify(firstStripped.slice(0, 60))}`,
+      );
+    }
+
+    // Leading pad must be within 1 of expected (floor((80-27)/2) = 26)
+    if (Math.abs(leadingSpaces - EXPECTED_LEFT_PAD) > 1) {
+      throw new Error(
+        `Expected leftPad≈${EXPECTED_LEFT_PAD}, got ${leadingSpaces}. ` +
+        `(cols=${COLS}, gameW=${EXPECTED_GAME_W})`,
+      );
+    }
+
+    // Non-space content per line must be ≈ EXPECTED_GAME_W half-block glyphs (allow ±2)
+    // Each ▀ is one glyph = 1 column; strip spaces from both ends of stripped line
+    for (const line of frameLines) {
+      const stripped = stripAnsi(line);
+      const trimmed  = stripped.trim();
+      // trimmed length in characters (each ▀ is 3 UTF-8 bytes but 1 JS char in the string)
+      // Count visible columns: each ▀ = 1 column, each ASCII char = 1 column
+      // Use spread to count Unicode code points
+      const glyphCount = [...trimmed].length;
+      if (Math.abs(glyphCount - EXPECTED_GAME_W) > 2) {
+        throw new Error(
+          `Expected game content ≈${EXPECTED_GAME_W} cols (±2), got ${glyphCount}. ` +
+          `Line: ${JSON.stringify(trimmed.slice(0, 40))}`,
+        );
+      }
+    }
+
+    // ── SIGTERM + cleanup ──────────────────────────────────────────────────────
     let daemonPid = 0;
     try {
       daemonPid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
@@ -162,17 +222,15 @@ tests.push({
     }
 
     if (isNaN(daemonPid) || daemonPid <= 0) {
-      throw new Error(`daemon.pid contains invalid value`);
+      throw new Error('daemon.pid contains invalid value');
     }
 
-    // SIGTERM the daemon
     try {
       process.kill(daemonPid, 'SIGTERM');
     } catch {
       throw new Error(`Failed to SIGTERM daemon pid ${daemonPid}`);
     }
 
-    // Wait for pidfile to be removed (up to 5s)
     const pidGone = await waitFor(() => {
       try { fs.statSync(pidFile); return false; } catch { return true; }
     }, 5000, 100);
@@ -181,7 +239,7 @@ tests.push({
       throw new Error('daemon.pid still present after SIGTERM');
     }
 
-    return `frame.ans OK, pid ${daemonPid} cleaned up`;
+    return `frame.ans OK — gameW=${EXPECTED_GAME_W}, leftPad=${leadingSpaces}, pid ${daemonPid} cleaned up`;
   },
 });
 
@@ -232,6 +290,127 @@ tests.push({
       // Clean up fake frame
       try { fs.unlinkSync(frameFile); } catch { /* ignore */ }
     }
+  },
+});
+
+// Test 4: Daemon stretch mode — full-width, no pillarbox
+tests.push({
+  name: 'doom daemon stretch mode — full-width content, no pillarbox (aspect=stretch, cols=60, pxRows=10)',
+  async fn() {
+    if (SKIP) return 'SKIP';
+
+    const doomDir    = path.join(os.tmpdir(), 'afk-arcade', 'doom');
+    const pidFile    = path.join(doomDir, 'daemon.pid');
+    const frameFile  = path.join(doomDir, 'frame.ans');
+    const viewportFile = path.join(doomDir, 'viewport.json');
+    const configDir  = path.join(os.homedir(), '.claude', 'afk-arcade');
+    const configFile = path.join(configDir, 'config.json');
+
+    // Clean state
+    for (const f of [pidFile, frameFile, viewportFile]) {
+      try { fs.unlinkSync(f); } catch { /* ignore */ }
+    }
+    fs.mkdirSync(doomDir, { recursive: true });
+
+    // Set aspect=stretch in config
+    try {
+      fs.mkdirSync(configDir, { recursive: true });
+      const existing = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+      fs.writeFileSync(configFile, JSON.stringify({ ...existing, aspect: 'stretch' }), 'utf8');
+    } catch {
+      // Config may not exist yet — write a fresh one
+      try {
+        fs.mkdirSync(configDir, { recursive: true });
+        fs.writeFileSync(configFile, JSON.stringify({ enabled: true, game: 'doom', rows: 5, aspect: 'stretch' }), 'utf8');
+      } catch { /* non-fatal */ }
+    }
+
+    const COLS = 60;
+    const PX_ROWS = 10;
+
+    fs.writeFileSync(viewportFile, JSON.stringify({ cols: COLS, pxRows: PX_ROWS, truecolor: true }), 'utf8');
+
+    // Spawn daemon
+    const child = spawn(process.execPath, ['--no-warnings', DAEMON_SCRIPT], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+
+    // Poll up to 20s for frame.ans
+    const deadline = Date.now() + 20_000;
+    const ok = await waitFor(() => {
+      try {
+        const stat = fs.statSync(frameFile);
+        if (Date.now() - stat.mtimeMs > 5000) return false;
+        const content = fs.readFileSync(frameFile, 'utf8');
+        return content.includes('▀') && content.includes('\x1b[');
+      } catch {
+        return false;
+      }
+    }, 20_000, 300);
+
+    if (!ok) {
+      try { process.kill(child.pid, 'SIGTERM'); } catch { /* ignore */ }
+      throw new Error(`frame.ans not written within 20s (deadline ${deadline})`);
+    }
+
+    // ── Layout assertions: stretch = full width, gameW == cols ─────────────────
+    const frameContent = fs.readFileSync(frameFile, 'utf8');
+    const frameLines = frameContent.split('\n').filter(l => l.length > 0);
+
+    const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
+
+    for (const line of frameLines) {
+      const stripped = stripAnsi(line);
+      const trimmed  = stripped.trim();
+      const glyphCount = [...trimmed].length;
+      // Stretch: content should fill the full COLS width (allow ±2 for reset sequences)
+      if (Math.abs(glyphCount - COLS) > 2) {
+        throw new Error(
+          `Stretch mode: expected content ≈${COLS} cols (±2), got ${glyphCount}. ` +
+          `Line: ${JSON.stringify(trimmed.slice(0, 40))}`,
+        );
+      }
+      // No leading spaces in stretch mode
+      const leadingSpaces = stripped.length - stripped.trimStart().length;
+      if (leadingSpaces > 0) {
+        throw new Error(
+          `Stretch mode: expected no leading spaces, got ${leadingSpaces}. ` +
+          `Line: ${JSON.stringify(stripped.slice(0, 40))}`,
+        );
+      }
+    }
+
+    // ── SIGTERM + cleanup ──────────────────────────────────────────────────────
+    let daemonPid = 0;
+    try {
+      daemonPid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+    } catch {
+      throw new Error('daemon.pid not written');
+    }
+
+    try {
+      process.kill(daemonPid, 'SIGTERM');
+    } catch {
+      throw new Error(`Failed to SIGTERM daemon pid ${daemonPid}`);
+    }
+
+    const pidGone = await waitFor(() => {
+      try { fs.statSync(pidFile); return false; } catch { return true; }
+    }, 5000, 100);
+
+    if (!pidGone) {
+      throw new Error('daemon.pid still present after SIGTERM');
+    }
+
+    // Restore aspect to 4:3 so other tests run with the default
+    try {
+      const existing = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+      fs.writeFileSync(configFile, JSON.stringify({ ...existing, aspect: '4:3' }), 'utf8');
+    } catch { /* non-fatal */ }
+
+    return `stretch OK — cols=${COLS}, no pillarbox, pid ${daemonPid} cleaned up`;
   },
 });
 

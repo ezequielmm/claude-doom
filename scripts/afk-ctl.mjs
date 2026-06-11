@@ -32,7 +32,7 @@ function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
 
 function printConfig(cfg) {
   process.stdout.write(
-    `afk-arcade: game=${cfg.game} rows=${cfg.rows} enabled=${cfg.enabled}\n`,
+    `afk-arcade: game=${cfg.game} rows=${cfg.rows} aspect=${cfg.aspect ?? '4:3'} enabled=${cfg.enabled}\n`,
   );
 }
 
@@ -124,12 +124,25 @@ switch (cmd) {
   case 'rows': {
     const raw = parseInt(args[1], 10);
     if (isNaN(raw)) {
-      process.stdout.write(`afk-arcade: "rows" requires a number. Usage: afk-ctl.mjs rows <2..12>\n`);
+      process.stdout.write(`afk-arcade: "rows" requires a number. Usage: afk-ctl.mjs rows <2..15>\n`);
       process.exit(1);
     }
-    const rows = clamp(raw, 2, 12);
+    const rows = clamp(raw, 2, 15);
     writeConfig({ rows });
     printConfig({ ...cfg, rows });
+    break;
+  }
+
+  case 'aspect': {
+    const aspect = args[1];
+    if (!['4:3', '16:10', 'stretch'].includes(aspect)) {
+      process.stdout.write(
+        `afk-arcade: unknown aspect "${aspect ?? ''}". Valid options: 4:3, 16:10, stretch\n`,
+      );
+      process.exit(1);
+    }
+    writeConfig({ aspect });
+    printConfig({ ...cfg, aspect });
     break;
   }
 
@@ -138,12 +151,13 @@ switch (cmd) {
       'afk-arcade control CLI',
       '',
       'Commands:',
-      '  status         — show current config and active sessions',
-      '  on / off       — enable or disable the banner',
-      '  game fire      — switch to DOOM fire effect',
-      '  game doom      — switch to DOOM WASM daemon frame (Phase B)',
-      '  rows <N>       — set banner height (2..12 rows)',
-      '  fetch-doom     — download DOOM WASM assets into vendor/doom/',
+      '  status               — show current config and active sessions',
+      '  on / off             — enable or disable the banner',
+      '  game fire            — switch to DOOM fire effect',
+      '  game doom            — switch to DOOM WASM daemon frame (Phase B)',
+      '  rows <N>             — set banner height (2..15 rows)',
+      '  aspect <4:3|16:10|stretch> — set DOOM frame aspect ratio (default: 4:3)',
+      '  fetch-doom           — download DOOM WASM assets into vendor/doom/',
     ].join('\n') + '\n');
     break;
   }
