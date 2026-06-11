@@ -73,19 +73,26 @@ function isProcessAlive(pid) {
 function checkSingleton() {
   mkdirp(DOOM_TMP);
 
-  try {
-    const raw = fs.readFileSync(PIDFILE, 'utf8').trim();
-    const existingPid = parseInt(raw, 10);
-    if (!isNaN(existingPid) && existingPid !== process.pid && isProcessAlive(existingPid)) {
-      // Another daemon is already running — exit cleanly
-      process.exit(0);
+  // Claim the pidfile with an exclusive create BEFORE any heavy init, so two
+  // daemons racing through startup cannot both survive. If the holder is a
+  // live process, yield; if it is stale, clear it and retry the claim once.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      fs.writeFileSync(PIDFILE, String(process.pid), { flag: 'wx' });
+      return;
+    } catch {
+      let existingPid = NaN;
+      try {
+        existingPid = parseInt(fs.readFileSync(PIDFILE, 'utf8').trim(), 10);
+      } catch { /* unreadable — treat as stale */ }
+      if (!isNaN(existingPid) && existingPid !== process.pid && isProcessAlive(existingPid)) {
+        process.exit(0);
+      }
+      removePidfile();
     }
-  } catch {
-    // Pidfile missing or unreadable — proceed
   }
-
-  // Write our own pidfile
-  fs.writeFileSync(PIDFILE, String(process.pid), 'utf8');
+  // Could not claim after clearing a stale pidfile — yield to the other racer.
+  process.exit(0);
 }
 
 // ── Viewport ──────────────────────────────────────────────────────────────────

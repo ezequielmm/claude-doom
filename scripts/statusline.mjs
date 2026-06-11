@@ -323,8 +323,10 @@ async function main() {
           child.unref();
         } catch { /* spawn failed — non-fatal */ }
 
-        // Remove lock after a moment (daemon will write pidfile before we're called again)
-        try { fs.rmdirSync(lockDir); } catch { /* ignore */ }
+        // Keep the lock — the daemon needs a moment to claim its pidfile, and
+        // concurrent statusline polls (multiple sessions) must not double-spawn.
+        // The stale check above clears it after 30s, which also rate-limits
+        // respawn attempts if the daemon crashes on boot.
       }
     }
 
