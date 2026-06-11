@@ -27,6 +27,19 @@ const SESSION_DIR = path.join(os.tmpdir(), 'afk-arcade', 'sessions');
 const FIRE_DIR    = path.join(os.tmpdir(), 'afk-arcade', 'sessions');
 const TEST_SESSION = 't1';
 
+// ── User config protection ────────────────────────────────────────────────────
+// Tests mutate the real user config through afk-ctl (off/on, game switches).
+// Snapshot it now and restore on exit so test runs never clobber user choices.
+
+const USER_CONFIG_PATH = path.join(os.homedir(), '.claude', 'afk-arcade', 'config.json');
+let userConfigSnapshot = null;
+try { userConfigSnapshot = fs.readFileSync(USER_CONFIG_PATH, 'utf8'); } catch { /* no config yet */ }
+process.on('exit', () => {
+  try {
+    if (userConfigSnapshot !== null) fs.writeFileSync(USER_CONFIG_PATH, userConfigSnapshot);
+  } catch { /* best effort */ }
+});
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 let passed = 0;

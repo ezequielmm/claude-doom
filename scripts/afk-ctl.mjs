@@ -124,10 +124,10 @@ switch (cmd) {
   case 'rows': {
     const raw = parseInt(args[1], 10);
     if (isNaN(raw)) {
-      process.stdout.write(`afk-arcade: "rows" requires a number. Usage: afk-ctl.mjs rows <2..15>\n`);
+      process.stdout.write(`afk-arcade: "rows" requires a number. Usage: afk-ctl.mjs rows <2..30>\n`);
       process.exit(1);
     }
-    const rows = clamp(raw, 2, 15);
+    const rows = clamp(raw, 2, 30);
     writeConfig({ rows });
     printConfig({ ...cfg, rows });
     break;
@@ -167,7 +167,7 @@ switch (cmd) {
       '  on / off             — enable or disable the banner',
       '  game fire            — switch to DOOM fire effect',
       '  game doom            — switch to DOOM WASM daemon frame (Phase B)',
-      '  rows <N>             — set banner height (2..15 rows)',
+      '  rows <N>             — set banner height (2..30 rows)',
       '  aspect <4:3|16:10|stretch> — set DOOM frame aspect ratio (default: 4:3)',
       '  fetch-doom           — download DOOM WASM assets into vendor/doom/',
       '  play                 — print the command to play DOOM in a fresh terminal',
