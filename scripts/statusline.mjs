@@ -380,7 +380,7 @@ async function main() {
       // Backdrop OFF cleanup: if a backdrop image was previously transmitted
       // (bookkeeping exists) delete it from the terminal and clear the record.
       if (config.backdrop !== true) {
-        const txJsonPath = path.join(TMP_ROOT, 'backdrop-tx.json');
+        const txJsonPath = path.join(TMP_ROOT, `backdrop-tx-${sessionId ?? 'global'}.json`);
         try {
           const txState = JSON.parse(fs.readFileSync(txJsonPath, 'utf8'));
           if (typeof txState.ttyPath === 'string') {
@@ -404,7 +404,10 @@ async function main() {
           const backdropPng = path.join(doomDir, 'backdrop.png');
           const bdStat = fs.statSync(backdropPng);
           if (Date.now() - bdStat.mtimeMs < 12000) {
-            const txJsonPath = path.join(TMP_ROOT, 'backdrop-tx.json');
+            // Per-session bookkeeping: each session discovers and caches ITS
+            // OWN ancestor tty — a shared file made concurrent sessions
+            // (e.g. Warp + Apple Terminal) clobber each other's tty path.
+            const txJsonPath = path.join(TMP_ROOT, `backdrop-tx-${sessionId ?? 'global'}.json`);
             const txState = (() => {
               try { return JSON.parse(fs.readFileSync(txJsonPath, 'utf8')); } catch { return {}; }
             })();
@@ -492,7 +495,7 @@ async function main() {
 
               // Bookkeeping is read early so the cached ancestor-tty path is
               // available to the open chain below.
-              const txJsonPath = path.join(TMP_ROOT, 'pixel-tx.json');
+              const txJsonPath = path.join(TMP_ROOT, `pixel-tx-${sessionId ?? 'global'}.json`);
               const txState = (() => {
                 try { return JSON.parse(fs.readFileSync(txJsonPath, 'utf8')); } catch { return {}; }
               })();
