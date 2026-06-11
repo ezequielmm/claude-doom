@@ -108,7 +108,7 @@ function readViewport() {
     const raw = fs.readFileSync(VIEWPORT, 'utf8');
     const obj = JSON.parse(raw);
     const cols    = typeof obj.cols     === 'number' ? Math.max(20, Math.min(220, obj.cols))     : DEFAULT_VIEWPORT.cols;
-    const pxRows  = typeof obj.pxRows   === 'number' ? Math.max(4,  Math.min(48,  obj.pxRows))   : DEFAULT_VIEWPORT.pxRows;
+    const pxRows  = typeof obj.pxRows   === 'number' ? Math.max(4,  Math.min(60,  obj.pxRows))   : DEFAULT_VIEWPORT.pxRows;
     const truecolor = typeof obj.truecolor === 'boolean' ? obj.truecolor : DEFAULT_VIEWPORT.truecolor;
     return { cols, pxRows, truecolor, stale: false };
   } catch {
