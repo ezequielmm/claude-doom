@@ -20,7 +20,7 @@ import { readRegistry, pruneRegistry } from '../lib/registry.mjs';
 import { computeGameWidth, buildScaledBuffer, bufferGetPixel } from '../lib/scale.mjs';
 import { sharpen, toneLift } from '../lib/postfx.mjs';
 import { encodePngFast } from '../lib/png.mjs';
-import { kittyBackdropImage } from '../lib/gfx-protocol.mjs';
+import { kittyBackdropFileImage } from '../lib/gfx-protocol.mjs';
 import { debugEnabled, dbgLog } from '../lib/debug.mjs';
 import { createBot } from '../lib/doom-bot.mjs';
 
@@ -395,9 +395,18 @@ async function main() {
 
             if (pngBuf) {
               streamFrameCount++;
+              // Persist the frame atomically, then transmit BY FILE PATH (t=f):
+              // the APC is ~100 bytes — a single atomic tty write that cannot
+              // tear against Claude Code's concurrent output. Inlining the PNG
+              // (t=d) at streaming rates spilled base64 as text on screen.
+              try {
+                const tmp = BACKDROP_PNG + '.tmp';
+                fs.writeFileSync(tmp, pngBuf);
+                fs.renameSync(tmp, BACKDROP_PNG);
+              } catch { /* keep previous frame on disk */ }
               for (const [_sid, entry] of ttyEntries) {
                 try {
-                  const txStr = kittyBackdropImage(pngBuf, {
+                  const txStr = kittyBackdropFileImage(BACKDROP_PNG, {
                     imageId: 77,
                     cols: entry.cols,
                     rows: entry.lines,
