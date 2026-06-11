@@ -11,7 +11,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { readConfig, resolveSessionState, TMP_ROOT } from '../lib/state.mjs';
 import { createFire, stepFire, heatToRgb, saveFire, loadFire } from '../lib/fire.mjs';
@@ -162,6 +162,42 @@ function buildHudLine({ state, modelObj, ctxObj, width, extraSuffix }) {
 function stripAnsi(str) {
   // eslint-disable-next-line no-control-regex
   return str.replace(/\x1b\[[0-9;]*m/g, '');
+}
+
+/**
+ * Find the terminal device of the nearest ancestor process that has one.
+ *
+ * Claude Code spawns statusline children without a controlling terminal
+ * (/dev/tty → ENXIO), but the claude process itself sits on a real tty
+ * (e.g. ttys011). Walking up the parent chain with `ps -o ppid=,tty=`
+ * finds it; that device is owned by the same user and is writable, giving
+ * us an out-of-band channel to the terminal for kitty graphics.
+ *
+ * @returns {string|null}  e.g. "/dev/ttys011", or null if none found
+ */
+function discoverAncestorTty() {
+  let pid = process.ppid;
+  for (let depth = 0; depth < 6 && pid > 1; depth++) {
+    let out = '';
+    try {
+      const r = spawnSync('ps', ['-o', 'ppid=,tty=', '-p', String(pid)], {
+        encoding: 'utf8',
+        timeout: 800,
+      });
+      out = r.stdout ?? '';
+    } catch {
+      return null;
+    }
+    const m = out.trim().match(/^(\d+)\s+(\S+)/);
+    if (!m) return null;
+    const ppid = parseInt(m[1], 10);
+    const tty = m[2];
+    if (tty && tty !== '??' && tty !== '-') {
+      return tty.startsWith('/dev/') ? tty : `/dev/${tty}`;
+    }
+    pid = ppid;
+  }
+  return null;
 }
 
 // ── Fire persistence ──────────────────────────────────────────────────────────
@@ -373,14 +409,39 @@ async function main() {
             } else {
               diag.pixel.png = { ageMs: pngAgeMs, bytes: pngStat.size };
 
-              // Try opening /dev/tty for writing (may fail in piped/CI contexts).
+              // Bookkeeping is read early so the cached ancestor-tty path is
+              // available to the open chain below.
+              const txJsonPath = path.join(TMP_ROOT, 'pixel-tx.json');
+              const txState = (() => {
+                try { return JSON.parse(fs.readFileSync(txJsonPath, 'utf8')); } catch { return {}; }
+              })();
+
+              // Open a terminal device for writing. Chain:
+              //   1. /dev/tty            — works only with a controlling terminal
+              //   2. cached ancestor tty — discovered on a previous poll
+              //   3. ps-walk discovery   — find the claude ancestor's tty device
+              // Claude Code gives statusline children NO controlling terminal
+              // (ENXIO), so 2/3 are the real path on macOS.
               let ttyFd = -1;
-              try {
-                ttyFd = fs.openSync('/dev/tty', 'w');
-                diag.pixel.tty = 'ok';
-              } catch (ttyErr) {
-                diag.pixel.tty = `err:${ttyErr.message}`;
-                diag.pixel.fellBack = 'tty-open-failed';
+              let ttyPathUsed = null;
+              const tryOpen = (p) => {
+                try { ttyFd = fs.openSync(p, 'w'); ttyPathUsed = p; return true; } catch { return false; }
+              };
+
+              if (tryOpen('/dev/tty')) {
+                diag.pixel.tty = 'ok:/dev/tty';
+              } else if (typeof txState.ttyPath === 'string' && txState.ttyPath !== '/dev/tty' && tryOpen(txState.ttyPath)) {
+                diag.pixel.tty = `ok:cached:${txState.ttyPath}`;
+              } else {
+                const discovered = discoverAncestorTty();
+                if (discovered && tryOpen(discovered)) {
+                  diag.pixel.tty = `ok:discovered:${discovered}`;
+                } else {
+                  diag.pixel.tty = discovered
+                    ? `err:open-failed:${discovered}`
+                    : 'err:no-ancestor-tty';
+                  diag.pixel.fellBack = 'tty-open-failed';
+                }
               }
 
               if (ttyFd >= 0) {
@@ -392,9 +453,6 @@ async function main() {
                   const leftPad     = Math.floor((width - gameW) / 2);
 
                   // Re-transmit only when the PNG file has changed since last time.
-                  const txJsonPath = path.join(TMP_ROOT, 'pixel-tx.json');
-                  const txState    = (() => { try { return JSON.parse(fs.readFileSync(txJsonPath, 'utf8')); } catch { return {}; } })();
-
                   if (pngStat.mtimeMs !== (txState.lastMtime ?? 0)) {
                     const pngBuf  = fs.readFileSync(doomFramePng);
                     const txStr   = kittyVirtualImage(pngBuf, { imageId: 42, cols: gameW, rows });
@@ -416,6 +474,7 @@ async function main() {
                         lastMtime: pngStat.mtimeMs,
                         attempts: (txState.attempts ?? 0) + 1,
                         since:    txState.since ?? Date.now(),
+                        ttyPath:  ttyPathUsed,
                       }), 'utf8');
                       fs.renameSync(txTmp, txJsonPath);
                     } catch { /* non-fatal */ }
