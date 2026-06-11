@@ -175,6 +175,26 @@ switch (cmd) {
     break;
   }
 
+  case 'backdrop': {
+    const value = args[1];
+    if (!['on', 'off'].includes(value)) {
+      process.stdout.write(
+        `afk-arcade: usage: backdrop <on|off>\n` +
+        '  on  — the darkened game frame becomes the WHOLE terminal background\n' +
+        '        (kitty graphics z=-2 under-text layer; Claude Code UI floats on top;\n' +
+        '        verified in Warp). The banner collapses to a single HUD line.\n' +
+        '  off — remove the backdrop image and restore the normal banner\n',
+      );
+      process.exit(1);
+    }
+    writeConfig({ backdrop: value === 'on' });
+    printConfig({ ...cfg, backdrop: value === 'on' });
+    if (value === 'on') {
+      process.stdout.write('Backdrop enabled — give the daemon a few seconds to bake the first frame.\n');
+    }
+    break;
+  }
+
   case 'debug': {
     const sub = args[1];
 
@@ -320,6 +340,8 @@ switch (cmd) {
       '  game doom            — switch to DOOM WASM daemon frame (Phase B)',
       '  rows <N>             — set banner height (2..40 rows)',
       '  aspect <4:3|16:10|stretch> — set DOOM frame aspect ratio (default: 4:3)',
+      '  backdrop <on|off>    — game as the WHOLE terminal background (kitty z=-2),',
+      '                         Claude Code UI floats on top; banner becomes HUD-only',
       '  style <quad|half|pixel>',
       '                       — set render style: quad (2×2 blocks, default), half (▀ classic),',
       '                         or pixel (EXPERIMENTAL kitty Unicode placeholder banner)',

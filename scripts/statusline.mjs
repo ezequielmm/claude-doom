@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { readConfig, resolveSessionState, TMP_ROOT } from '../lib/state.mjs';
 import { createFire, stepFire, heatToRgb, saveFire, loadFire } from '../lib/fire.mjs';
 import { renderHalfBlocks, renderQuadrants } from '../lib/render.mjs';
-import { kittyVirtualImage, kittyPlaceholderLines } from '../lib/gfx-protocol.mjs';
+import { kittyVirtualImage, kittyPlaceholderLines, kittyBackdropImage, kittyDeleteImage } from '../lib/gfx-protocol.mjs';
 import { debugEnabled, dbgLog } from '../lib/debug.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -376,6 +376,80 @@ async function main() {
       // discovery from headless contexts (tests, CI) would otherwise find an
       // unrelated tty up the process tree and spray kitty escapes at it.
       const hasTerminalEnv = Boolean(process.env.TERM_PROGRAM || process.env.TERM);
+
+      // Backdrop OFF cleanup: if a backdrop image was previously transmitted
+      // (bookkeeping exists) delete it from the terminal and clear the record.
+      if (config.backdrop !== true) {
+        const txJsonPath = path.join(TMP_ROOT, 'backdrop-tx.json');
+        try {
+          const txState = JSON.parse(fs.readFileSync(txJsonPath, 'utf8'));
+          if (typeof txState.ttyPath === 'string') {
+            try {
+              const fd = fs.openSync(txState.ttyPath, 'w');
+              fs.writeSync(fd, kittyDeleteImage(77));
+              fs.closeSync(fd);
+            } catch { /* tty gone — nothing to clean */ }
+          }
+          fs.unlinkSync(txJsonPath);
+        } catch { /* no leftover backdrop — nothing to do */ }
+      }
+
+      // ── Backdrop mode: the game becomes the WHOLE terminal's background ────
+      // Transmit the darkened full frame at kitty z=-2 (under-text layer,
+      // verified compositing in Warp): Claude Code's UI floats over the game.
+      // The visible banner collapses to the single HUD line.
+      if (config.backdrop === true && !process.env.AFK_ARCADE_NO_PIXEL && hasTerminalEnv) {
+        diag.backdrop = { tx: null };
+        try {
+          const backdropPng = path.join(doomDir, 'backdrop.png');
+          const bdStat = fs.statSync(backdropPng);
+          if (Date.now() - bdStat.mtimeMs < 12000) {
+            const txJsonPath = path.join(TMP_ROOT, 'backdrop-tx.json');
+            const txState = (() => {
+              try { return JSON.parse(fs.readFileSync(txJsonPath, 'utf8')); } catch { return {}; }
+            })();
+
+            let ttyFd = -1;
+            let ttyPathUsed = null;
+            const tryOpen = (p) => {
+              try { ttyFd = fs.openSync(p, 'w'); ttyPathUsed = p; return true; } catch { return false; }
+            };
+            if (!tryOpen('/dev/tty')) {
+              if (!(typeof txState.ttyPath === 'string' && tryOpen(txState.ttyPath))) {
+                const discovered = discoverAncestorTty();
+                if (discovered) tryOpen(discovered);
+              }
+            }
+
+            if (ttyFd >= 0) {
+              if (bdStat.mtimeMs !== (txState.lastMtime ?? 0)) {
+                const fullCols = parseInt(process.env.COLUMNS, 10) || 80;
+                const fullRows = parseInt(process.env.LINES, 10) || 24;
+                const pngBuf = fs.readFileSync(backdropPng);
+                const txStr = kittyBackdropImage(pngBuf, { imageId: 77, cols: fullCols, rows: fullRows });
+                fs.writeSync(ttyFd, txStr);
+                diag.backdrop.tx = { sent: true, bytes: txStr.length };
+                try {
+                  const t = txJsonPath + '.tmp';
+                  fs.writeFileSync(t, JSON.stringify({ lastMtime: bdStat.mtimeMs, ttyPath: ttyPathUsed }), 'utf8');
+                  fs.renameSync(t, txJsonPath);
+                } catch { /* non-fatal */ }
+              } else {
+                diag.backdrop.tx = { sent: false, skip: 'mtime-unchanged' };
+              }
+              fs.closeSync(ttyFd);
+            }
+          }
+        } catch { /* backdrop.png missing — daemon still warming */ }
+
+        const hudOnly = buildHudLine({
+          state, modelObj: json.model, ctxObj: json.context_window,
+          width, extraSuffix: 'backdrop',
+        }) + '\n';
+        process.stdout.write(hudOnly);
+        exitWithDiag(hudOnly, 'backdrop');
+        return;
+      }
       if (style === 'pixel' && !process.env.AFK_ARCADE_NO_PIXEL && hasTerminalEnv) {
         // Pixel path: transmit PNG directly to /dev/tty, emit placeholder lines to stdout.
         //

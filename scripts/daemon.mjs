@@ -31,6 +31,8 @@ const VIEWPORT  = path.join(DOOM_TMP, 'viewport.json');
 const FRAME_ANS = path.join(DOOM_TMP, 'frame.ans');
 // Written only when style === 'pixel'; the statusline reads this for U=1 placement.
 const FRAME_PNG = path.join(DOOM_TMP, 'frame.png');
+// Written only when backdrop === true; darkened full frame for the z=-2 layer.
+const BACKDROP_PNG = path.join(DOOM_TMP, 'backdrop.png');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -333,6 +335,27 @@ function writeFrame(engine, frameCount) {
     let tPngMs = null;
     let ansBytes = null;
     let pngBytes = null;
+
+    // ── Backdrop mode: full-frame DARKENED PNG for the under-text layer ──────
+    // The statusline transmits this with a negative z-index so the terminal
+    // composites the game UNDER Claude Code's UI. Darkening keeps text legible
+    // over bright game areas.
+    if (cfg.backdrop === true) {
+      try {
+        const dim = typeof cfg.backdropDim === 'number'
+          ? Math.min(1, Math.max(0.1, cfg.backdropDim))
+          : 0.4;
+        const bw = 640, bh = 400;
+        const rgb = buildScaledBuffer(engine.getPixel, engine.width, engine.height, bw, bh);
+        for (let i = 0; i < rgb.length; i++) rgb[i] = (rgb[i] * dim) | 0;
+        const pngBuf = encodePngFast(rgb, bw, bh);
+        const tmp = BACKDROP_PNG + '.tmp';
+        fs.writeFileSync(tmp, pngBuf);
+        fs.renameSync(tmp, BACKDROP_PNG);
+      } catch {
+        // Non-fatal — backdrop simply goes stale
+      }
+    }
 
     // ── Pixel style: write frame.png (half-res 2×2 box downscale) ────────────
     // Also always write frame.ans (quad) as the universal fallback.
