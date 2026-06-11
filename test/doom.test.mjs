@@ -275,7 +275,9 @@ tests.push({
       const r = spawnSync(process.execPath, ['--no-warnings', STATUS_SCRIPT], {
         input: payload,
         encoding: 'utf8',
-        env: { ...process.env, COLUMNS: '80', COLORTERM: 'truecolor' },
+        // AFK_ARCADE_NO_PIXEL: this test asserts the frame.ans text path —
+        // never let ancestor-tty discovery route it into pixel placeholders.
+        env: { ...process.env, COLUMNS: '80', COLORTERM: 'truecolor', AFK_ARCADE_NO_PIXEL: '1' },
         timeout: 5000,
       });
 

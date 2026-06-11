@@ -369,7 +369,11 @@ async function main() {
       // For pixel style, attempt out-of-band PNG transmission + placeholder text.
       const doomFramePng = path.join(doomDir, 'frame.png');
 
-      if (style === 'pixel' && !process.env.AFK_ARCADE_NO_PIXEL) {
+      // Pixel mode requires a real terminal-ish environment: ancestor-tty
+      // discovery from headless contexts (tests, CI) would otherwise find an
+      // unrelated tty up the process tree and spray kitty escapes at it.
+      const hasTerminalEnv = Boolean(process.env.TERM_PROGRAM || process.env.TERM);
+      if (style === 'pixel' && !process.env.AFK_ARCADE_NO_PIXEL && hasTerminalEnv) {
         // Pixel path: transmit PNG directly to /dev/tty, emit placeholder lines to stdout.
         //
         // Preconditions (all must hold — otherwise fall through to quad frame.ans):
