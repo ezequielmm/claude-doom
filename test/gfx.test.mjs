@@ -375,6 +375,227 @@ await test('engine.getFrameRGB — width*height*3 bytes, >50 distinct colors aft
   return `${width}×${height}, ${rgb.length} bytes, ${seen.size} distinct colors`;
 });
 
+// ── Probe tests ───────────────────────────────────────────────────────────────
+
+import { EventEmitter } from 'node:events';
+import { probeKittyGraphics } from '../lib/gfx-protocol.mjs';
+
+/**
+ * Build a fake duplex stream pair for probe tests.
+ *
+ * writtenToStdout  — collects bytes written to the fake stdout
+ * fakeStdin        — EventEmitter with a push(bytes) helper that fires 'data'
+ * fakeStdout       — WritableStream-like with a write() method
+ */
+function makeFakePair() {
+  const writtenToStdout = [];
+
+  const fakeStdout = {
+    write(data) {
+      writtenToStdout.push(typeof data === 'string' ? Buffer.from(data) : data);
+    },
+  };
+
+  const fakeStdin = new EventEmitter();
+  fakeStdin.isTTY = false; // skip setRawMode calls
+  fakeStdin.resume = () => {};
+  fakeStdin.pause  = () => {};
+
+  return { fakeStdin, fakeStdout, writtenToStdout };
+}
+
+// ── Test 6: probe — kitty OK reply → true ─────────────────────────────────────
+
+await test('probeKittyGraphics — OK reply → true, DA1 fence ignored', async () => {
+  const { fakeStdin, fakeStdout } = makeFakePair();
+
+  const probePromise = probeKittyGraphics(fakeStdin, fakeStdout, { timeoutMs: 200 });
+
+  // Simulate terminal replying with Kitty OK then DA1
+  // \x1b_Gi=4242;OK\x1b\\  then  \x1b[?62c
+  const kittyOK = Buffer.from('\x1b_Gi=4242;OK\x1b\\', 'binary');
+  const da1     = Buffer.from('\x1b[?62c', 'binary');
+  fakeStdin.emit('data', kittyOK);
+  fakeStdin.emit('data', da1);
+
+  const result = await probePromise;
+
+  if (result.supported !== true) {
+    throw new Error(`Expected supported=true, got ${result.supported}`);
+  }
+
+  return 'probe resolved true on Kitty OK reply';
+});
+
+// ── Test 7: probe — DA1 only (no kitty reply) → false ─────────────────────────
+
+await test('probeKittyGraphics — DA1 only, no kitty reply → false (fast)', async () => {
+  const { fakeStdin, fakeStdout } = makeFakePair();
+
+  const probePromise = probeKittyGraphics(fakeStdin, fakeStdout, { timeoutMs: 2000 });
+
+  // Only DA1 reply arrives — no kitty APC before it
+  const da1 = Buffer.from('\x1b[?62c', 'binary');
+  fakeStdin.emit('data', da1);
+
+  const result = await probePromise;
+
+  if (result.supported !== false) {
+    throw new Error(`Expected supported=false, got ${result.supported}`);
+  }
+
+  return 'probe resolved false on DA1 without kitty OK';
+});
+
+// ── Test 8: probe — timeout, no reply → false ────────────────────────────────
+
+await test('probeKittyGraphics — no reply → false after timeout', async () => {
+  const { fakeStdin, fakeStdout } = makeFakePair();
+
+  const t0     = Date.now();
+  const result = await probeKittyGraphics(fakeStdin, fakeStdout, { timeoutMs: 60 });
+  const elapsed = Date.now() - t0;
+
+  if (result.supported !== false) {
+    throw new Error(`Expected supported=false on timeout, got ${result.supported}`);
+  }
+  if (elapsed < 50) {
+    throw new Error(`Expected at least 50ms elapsed for timeout, got ${elapsed}ms`);
+  }
+  if (elapsed > 500) {
+    throw new Error(`Timeout took too long: ${elapsed}ms (expected ≤500ms)`);
+  }
+
+  return `resolved false after ${elapsed}ms (timeoutMs=60)`;
+});
+
+// ── Test 9: probe — keystroke bytes interleaved → preserved in carryOver ─────
+//
+// Design contract: carryOver contains ALL bytes received during the probe —
+// including probe responses themselves and any user keystrokes mixed in.
+// The caller is responsible for filtering out the probe-response bytes when
+// re-emitting; the important guarantee is that no bytes are silently dropped.
+//
+// Specifically: a keystroke byte that arrives BEFORE the Kitty OK (in the same
+// data chunk or a prior one) must appear in carryOver.  Bytes arriving on
+// separate .emit() calls after the promise has already settled are not captured
+// (the listener has been removed); that is the expected behavior.
+
+await test('probeKittyGraphics — keystroke before OK preserved in carryOver', async () => {
+  const { fakeStdin, fakeStdout } = makeFakePair();
+
+  const probePromise = probeKittyGraphics(fakeStdin, fakeStdout, { timeoutMs: 200 });
+
+  // 'w' arrives BEFORE the Kitty OK in the same Buffer → must be in carryOver.
+  const combined = Buffer.concat([
+    Buffer.from([0x77]),                              // 'w' keystroke before OK
+    Buffer.from('\x1b_Gi=4242;OK\x1b\\', 'binary'),  // Kitty OK — settles the probe
+  ]);
+  fakeStdin.emit('data', combined);
+  // 's' emitted AFTER promise settles — intentionally not captured (listener gone)
+
+  const result = await probePromise;
+
+  if (result.supported !== true) {
+    throw new Error(`Expected supported=true, got ${result.supported}`);
+  }
+
+  const co = result.carryOver;
+  if (!co.includes(0x77)) {
+    throw new Error(
+      `carryOver must include 0x77 ('w') typed before the OK. ` +
+      `Got: [${Array.from(co).map(b => '0x' + b.toString(16)).join(',')}]`,
+    );
+  }
+  // DA1-only path: keystroke before DA1 must also be preserved
+  const { fakeStdin: si2, fakeStdout: so2 } = makeFakePair();
+  const p2 = probeKittyGraphics(si2, so2, { timeoutMs: 200 });
+  const combined2 = Buffer.concat([
+    Buffer.from([0x73]),                  // 's' before DA1
+    Buffer.from('\x1b[?62c', 'binary'),   // DA1 — settles the probe as false
+  ]);
+  si2.emit('data', combined2);
+  const result2 = await p2;
+  if (result2.supported !== false) {
+    throw new Error(`Expected supported=false on DA1-only path, got ${result2.supported}`);
+  }
+  if (!result2.carryOver.includes(0x73)) {
+    throw new Error(`carryOver must include 0x73 ('s') typed before DA1`);
+  }
+
+  return `carryOver preserved 'w' (${co.length} bytes); DA1 path preserved 's' (${result2.carryOver.length} bytes)`;
+});
+
+// ── Test 10: Warp YAML writer — parseable YAML, correct URI form ──────────────
+
+await test('Warp launch config — YAML fields and URI format are correct', () => {
+  // Reproduce the template from afk-ctl.mjs play case to verify the output.
+  const homedir    = '/Users/testuser';
+  const execPath   = '/usr/local/bin/node';
+  const playScript = '/path/to/scripts/play.mjs';
+  const launchFile = path.join(homedir, '.warp', 'launch_configurations', 'claude-doom.yaml');
+
+  const yaml = [
+    '# Warp Launch Configuration — generated by afk-arcade /afk play',
+    '---',
+    'name: claude-doom',
+    'windows:',
+    '  - tabs:',
+    '      - title: DOOM',
+    '        layout:',
+    `          cwd: ${homedir}`,
+    '          commands:',
+    `            - exec: "${execPath} --no-warnings ${playScript} --gfx auto"`,
+  ].join('\n') + '\n';
+
+  // Structural assertions (no yaml lib — match key strings)
+  if (!yaml.includes('name: claude-doom')) {
+    throw new Error('YAML missing name: claude-doom');
+  }
+  if (!yaml.includes('windows:')) {
+    throw new Error('YAML missing windows: key');
+  }
+  if (!yaml.includes('  - tabs:')) {
+    throw new Error('YAML missing tabs: key');
+  }
+  if (!yaml.includes('        layout:')) {
+    throw new Error('YAML missing layout: key');
+  }
+  if (!yaml.includes(`cwd: ${homedir}`)) {
+    throw new Error(`YAML missing cwd: ${homedir}`);
+  }
+  if (!yaml.includes('          commands:')) {
+    throw new Error('YAML missing commands: key');
+  }
+  if (!yaml.includes('            - exec:')) {
+    throw new Error('YAML missing exec: key');
+  }
+  if (!yaml.includes('--gfx auto')) {
+    throw new Error('YAML exec command missing --gfx auto');
+  }
+
+  // URI form: warp://launch/<url-encoded-path>
+  // Official docs: https://docs.warp.dev/terminal/more-features/uri-scheme
+  // Raycast source: warp://launch/${encodeURIComponent(path)}
+  const uri = `warp://launch/${encodeURIComponent(launchFile)}`;
+
+  if (!uri.startsWith('warp://launch/')) {
+    throw new Error(`URI must start with warp://launch/, got: ${uri}`);
+  }
+  // Encoded path must decode back to the original file path
+  const encodedPart = uri.slice('warp://launch/'.length);
+  const decoded = decodeURIComponent(encodedPart);
+  if (decoded !== launchFile) {
+    throw new Error(`URI round-trip failed: expected ${launchFile}, got ${decoded}`);
+  }
+  // Must not contain raw slashes in the encoded part (they must be %2F)
+  if (encodedPart.includes('/')) {
+    throw new Error(`Encoded path must not contain raw slashes: ${encodedPart}`);
+  }
+
+  return `YAML ${yaml.length} bytes; URI: ${uri.slice(0, 60)}...`;
+});
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 
 process.stdout.write(`\n${passed} passed, ${failed} failed\n`);

@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.3.1] — 2026-06-11
+
+### Added
+- **Runtime Kitty graphics capability probe** (`probeKittyGraphics` in `lib/gfx-protocol.mjs`): sends a 1×1 RGB query APC followed by a DA1 fence and resolves `true` only when the terminal explicitly replies `\x1b_Gi=4242;OK\x1b\\`. Pixel-perfect mode now auto-enables on any terminal that speaks the Kitty graphics protocol — including recent Warp builds — without relying on environment variables alone.
+- **`--gfx auto` probe path in `scripts/play.mjs`**: when env-based detection yields no result (e.g. `TERM_PROGRAM=WarpTerminal`), the probe runs on the real TTY before the alternate screen opens so response bytes never leak visibly. Status row shows `gfx:kitty(probe)` / `gfx:iterm2` / `text:quad` to make the decision transparent.
+- **`/afk play` auto-launches a Warp tab on macOS**: writes `~/.warp/launch_configurations/claude-doom.yaml` (creating the directory if needed) and opens it via `warp://launch/<url-encoded-path>`. Falls back to printing the manual command if `open` fails or Warp is not installed. On macOS with iTerm2 but no Warp, prints the command with a note to run it inside iTerm2 for pixel mode.
+- 5 new tests in `test/gfx.test.mjs` covering probe OK→true, DA1-only→false, timeout→false, keystroke carry-over, and the Warp YAML/URI template.
+
+### Changed
+- `lib/gfx-protocol.mjs` exports `probeKittyGraphics` in addition to existing exports.
+- `scripts/play.mjs` imports `probeKittyGraphics`; `auto` detection is async and probe-aware.
+- `scripts/afk-ctl.mjs` `play` case: on darwin with Warp installed, writes the launch config YAML and opens it via the URI scheme instead of only printing the command.
+
+---
+
 ## [0.3.0] — 2026-06-11
 
 ### Added
@@ -93,6 +108,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Core test suite (`test/run.mjs`, `test/doom.test.mjs`) — DOOM tests skip cleanly when vendor assets absent
 - Zero npm dependencies — pure Node.js ESM
 
+[0.3.1]: https://github.com/ezequielmm/claude-doom/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/ezequielmm/claude-doom/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/ezequielmm/claude-doom/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/ezequielmm/claude-doom/compare/v0.1.2...v0.2.0

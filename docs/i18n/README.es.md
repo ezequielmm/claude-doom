@@ -12,12 +12,12 @@
 
 <h4 align="center">
   DOOM real (doomgeneric WASM) dentro del statusline de <a href="https://claude.com/claude-code">Claude Code</a> —
-  fuego mientras Claude trabaja, DOOM en modo demo cuando estás AFK, pantalla completa pixel-perfect en iTerm2/kitty.
+  fuego mientras Claude trabaja, DOOM en modo demo cuando estás AFK, pantalla completa pixel-perfect en iTerm2/kitty/Warp.
 </h4>
 
 <p align="center">
   <a href="../../LICENSE"><img src="https://img.shields.io/badge/licencia-MIT-blue.svg" alt="Licencia MIT" /></a>
-  <img src="https://img.shields.io/badge/versión-0.3.0-informational" alt="versión 0.3.0" />
+  <img src="https://img.shields.io/badge/versión-0.3.1-informational" alt="versión 0.3.1" />
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen" alt="Node >= 20" />
   <img src="https://img.shields.io/badge/dependencias-cero-success" alt="Cero dependencias" />
   <img src="https://img.shields.io/badge/Claude%20Code-%3E%3D2.1.153-blueviolet" alt="Claude Code >= 2.1.153" />
@@ -138,15 +138,15 @@ Frames PNG reales de 1280×800 transmitidos a fps adaptativos mediante protocolo
 node scripts/play.mjs --gfx auto
 ```
 
-El flag `--gfx auto` detecta tu terminal y elige el mejor protocolo. Usa `--res half` para 640×400 si tu conexión es lenta.
+El flag `--gfx auto` detecta tu terminal y elige el mejor protocolo. Para terminales no identificadas por variables de entorno (como Warp), se ejecuta automáticamente un probe de capacidades en runtime — el modo pixel se activa si la terminal responde con un OK del protocolo Kitty graphics; en caso contrario se usa texto cuadrante. Usa `--res half` para 640×400 si tu conexión es lenta.
 
 | Terminal | Soporte |
 |---|---|
 | iTerm2 | Completo (iTerm2 inline images) |
 | kitty | Completo (protocolo gráfico de Kitty) |
 | WezTerm | Completo (iTerm2 inline images) |
-| Apple Terminal | Fallback a half-blocks |
-| Warp | Fallback a half-blocks |
+| Warp | **Auto-probe en runtime** — modo pixel si tu build soporta Kitty graphics, texto cuadrante si no |
+| Apple Terminal | Fallback a texto cuadrante |
 
 ---
 
@@ -206,7 +206,7 @@ Cambiá el estilo en cualquier momento:
 | `/afk rows <N>` | Altura del banner, 2–30 filas |
 | `/afk aspect <4:3\|16:10\|stretch>` | Relación de aspecto del frame (predeterminado: `4:3`) |
 | `/afk style <quad\|half>` | Estilo del renderer: `quad` (bloques 2×2, predeterminado) o `half` (clásico `▀`) |
-| `/afk play` | Imprimir el comando para jugar en pantalla completa |
+| `/afk play` | Lanzar DOOM en una pestaña Warp (macOS + Warp instalado); si no, imprimir el comando |
 | `/afk fetch-doom` | Descargar los assets DOOM WASM en `vendor/` |
 | `/afk setup [--yes] [--no-iterm]` | Instalador guiado — conecta statusline, descarga assets, ofrece iTerm2 |
 

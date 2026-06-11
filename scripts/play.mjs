@@ -71,7 +71,7 @@ import { computeGameWidth, buildScaledBuffer, bufferGetPixel } from '../lib/scal
 import { sharpen, toneLift } from '../lib/postfx.mjs';
 import { readConfig } from '../lib/state.mjs';
 import { decodeKeys, HeldKeyTracker } from '../lib/keys.mjs';
-import { detectGraphics, iterm2Image, kittyImage } from '../lib/gfx-protocol.mjs';
+import { detectGraphics, probeKittyGraphics, iterm2Image, kittyImage } from '../lib/gfx-protocol.mjs';
 import { encodePngFast } from '../lib/png.mjs';
 
 // ── DOOM key codes ────────────────────────────────────────────────────────────
@@ -193,15 +193,64 @@ async function main() {
 
   // ── Interactive path ────────────────────────────────────────────────────────
 
-  // Detect graphics protocol
-  const gfxProtocol = detectGraphics(process.env, { override: GFX_FLAG });
+  // ── Detect graphics protocol ────────────────────────────────────────────────
+  //
+  // Resolution order for --gfx auto:
+  //   1. Explicit --gfx kitty|iterm2|off → use directly, skip probing.
+  //   2. env says iTerm2 or WezTerm → 'iterm2' (no probe needed).
+  //   3. env says kitty (TERM/KITTY_WINDOW_ID) → 'kitty'.
+  //   4. Otherwise (including TERM_PROGRAM=WarpTerminal, unknown terminals) →
+  //      run probeKittyGraphics on the real TTY → 'kitty' if true, else null.
+  //
+  // The probe is run BEFORE entering the alternate screen so its response bytes
+  // never appear visibly on screen.  The probe leaves stdin raw; we resume it
+  // below.  Any keystrokes typed during the probe are carried over.
 
-  if (!gfxProtocol && GFX_FLAG !== 'off' && GFX_FLAG !== 'auto') {
-    // Unknown override value — warn and continue with half-blocks
-    process.stderr.write(`play.mjs: unknown --gfx value '${GFX_FLAG}', using half-blocks\n`);
+  let gfxProtocol;
+  let probeCarryOver = null; // bytes typed during the probe, if any
+
+  if (GFX_FLAG !== 'auto') {
+    // Explicit value — use detectGraphics() directly (handles off/kitty/iterm2)
+    gfxProtocol = detectGraphics(process.env, { override: GFX_FLAG });
+    if (gfxProtocol === undefined && GFX_FLAG !== 'off') {
+      process.stderr.write(`play.mjs: unknown --gfx value '${GFX_FLAG}', using half-blocks\n`);
+      gfxProtocol = null;
+    }
+  } else {
+    // auto: first try env-based detection
+    const envDetected = detectGraphics(process.env, { override: 'auto' });
+    if (envDetected !== null) {
+      // env gave us a definitive answer
+      gfxProtocol = envDetected;
+    } else {
+      // Probe the terminal at runtime — works for Warp (kitty graphics support
+      // since ~2024) and any other terminal not identified by env vars.
+      const probe = await probeKittyGraphics(process.stdin, process.stdout, {
+        timeoutMs: 500,
+        alreadyRaw: false,
+      });
+      gfxProtocol = probe.supported ? 'kitty' : null;
+      if (probe.carryOver.length > 0) {
+        probeCarryOver = probe.carryOver;
+      }
+    }
   }
+
+  // Decide status-row gfx label (shown in status line after startup)
+  let gfxLabel;
+  if (gfxProtocol === 'kitty') {
+    // Distinguish probe-detected kitty from env-detected kitty
+    const envDetectedKitty =
+      (process.env.TERM ?? '').toLowerCase().includes('kitty') ||
+      process.env.KITTY_WINDOW_ID !== undefined;
+    gfxLabel = envDetectedKitty ? 'gfx:kitty' : 'gfx:kitty(probe)';
+  } else if (gfxProtocol === 'iterm2') {
+    gfxLabel = 'gfx:iterm2';
+  } else {
+    gfxLabel = 'text:quad';
+  }
+
   if (!gfxProtocol && GFX_FLAG === 'auto') {
-    // Auto-detect found nothing — print a single notice line before entering alt screen
     process.stderr.write(
       'play.mjs: terminal does not support iTerm2 or Kitty graphics — using half-block rendering\n',
     );
@@ -211,6 +260,11 @@ async function main() {
   process.stdout.write('\x1b[?1049h\x1b[?25l');
   process.stdin.setRawMode(true);
   process.stdin.resume();
+
+  // Re-inject any bytes typed during the probe so they are not lost
+  if (probeCarryOver && probeCarryOver.length > 0) {
+    process.stdin.emit('data', Buffer.from(probeCarryOver));
+  }
 
   // Geometry (computed fresh on each resize)
   let termCols = process.stdout.columns  || 80;
@@ -406,10 +460,10 @@ async function main() {
       imgEscape = kittyImage(png, { cols, rows: imgRows, imageId: _gfxImageId });
     }
 
-    // Status line: achieved fps + controls hint
+    // Status line: achieved fps + gfx label + controls hint
     const elapsed = Date.now() - t0;
     const fps = elapsed > 0 ? Math.round(1000 / elapsed) : 99;
-    const statusLine = `${fps}fps [${gfxProtocol}] ${HELP}`.slice(0, cols - 1);
+    const statusLine = `${fps}fps [${gfxLabel}] ${HELP}`.slice(0, cols - 1);
 
     // Emit: cursor home + synchronized output wrapper + image + cursor to status row + status
     const frame =
