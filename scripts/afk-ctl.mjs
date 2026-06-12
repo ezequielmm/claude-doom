@@ -493,6 +493,67 @@ switch (cmd) {
     break;
   }
 
+  case 'arcade': {
+    // Launch a NEW terminal window running claude (--continue, same project)
+    // inside the doomscreen compositor. Everything by ABSOLUTE path — zero
+    // dependence on PATH shims, profiles, broadcasts or elevation. This is
+    // the no-dance activation: install plugin → /arcade.
+    const screenScript = path.join(ROOT, 'scripts', 'doomscreen.mjs');
+    const dry = args.includes('--print');
+
+    if (process.platform !== 'win32') {
+      process.stdout.write(
+        'On macOS/Linux run in a fresh terminal:\n' +
+        `  ${process.execPath} --no-warnings ${screenScript}\n`,
+      );
+      break;
+    }
+
+    // Resolve the real claude (skip our shim bin if present)
+    const shimBin = path.join(os.homedir(), '.claude', 'afk-arcade', 'bin');
+    let realClaude = null;
+    try {
+      const out = execFileSync('where.exe', ['claude'], { encoding: 'utf8' });
+      const lines = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      realClaude = lines.find((l) => l.toLowerCase().endsWith('.cmd') &&
+                                     !l.toLowerCase().startsWith(shimBin.toLowerCase()))
+                ?? lines.find((l) => !l.toLowerCase().startsWith(shimBin.toLowerCase()));
+    } catch { /* not on PATH */ }
+    if (!realClaude) {
+      process.stdout.write('No pude resolver `claude` en el PATH de este proceso.\n');
+      break;
+    }
+
+    // Direct mode (no --wrap): explicit launch always composites
+    const inner =
+      `"${process.execPath}" --no-warnings "${screenScript}" -- "${realClaude}" --continue`;
+
+    // Prefer Windows Terminal when installed; classic console otherwise
+    let hasWt = false;
+    try { execFileSync('where.exe', ['wt.exe'], { stdio: 'ignore' }); hasWt = true; } catch { /* no wt */ }
+    const launch = hasWt
+      ? `wt -d "${process.cwd()}" cmd /c ${inner}`
+      : `start "DOOM Arcade" /D "${process.cwd()}" conhost.exe cmd /c ${inner}`;
+
+    if (dry) {
+      process.stdout.write(launch + '\n');
+      break;
+    }
+    try {
+      const child = spawnSync('cmd.exe', ['/c', launch], { timeout: 15_000 });
+      void child;
+      process.stdout.write([
+        'Ventana DOOM Arcade lanzada — tu conversación continúa allí (claude --continue)',
+        'con el juego fullscreen de fondo. F8 o Ctrl+] toggle teclado ↔ marine.',
+        'Podés cerrar esta sesión cuando quieras.',
+        '',
+      ].join('\n'));
+    } catch (err) {
+      process.stdout.write(`No pude lanzar la ventana: ${err.message}\nComando manual:\n  ${inner}\n`);
+    }
+    break;
+  }
+
   case 'brain': {
     const brainScript = path.join(ROOT, 'scripts', 'doombrain.mjs');
     const doomTmp = path.join(os.tmpdir(), 'afk-arcade', 'doom');
@@ -745,6 +806,8 @@ switch (cmd) {
       '  debug tail [n]       — print last n lines from debug.log (default: 30)',
       '  fetch-doom           — download DOOM WASM assets into vendor/doom/',
       '  play                 — print the command to play DOOM in a fresh terminal',
+      '  arcade               — NEW window: this conversation continues (claude',
+      '                         --continue) with DOOM fullscreen behind it. Zero setup.',
       '  screen [on|off]      — universal backdrop: DOOM behind Claude in ANY terminal',
       '                         (on = plain `claude` boots with it; F8 toggles keyboard)',
       '  brain [on|off|status]— Claude pilots the marine: a cheap model (haiku) reads',

@@ -294,6 +294,21 @@ export async function runScreenTests(counters, { test: testFn }) {
       'no block glyphs — the banner must not float over the fullscreen game');
   });
 
+  if (process.platform === 'win32') {
+    await testFn('afk-ctl arcade --print composes an absolute-path launch command', async () => {
+      const { spawnSync } = await import('node:child_process');
+      const r = spawnSync(process.execPath,
+        ['--no-warnings', path.join(ROOT, 'scripts', 'afk-ctl.mjs'), 'arcade', '--print'],
+        { encoding: 'utf8', timeout: 30_000 });
+      assert(r.status === 0, `exit 0 expected, got ${r.status}`);
+      const cmd = r.stdout.trim();
+      assert(cmd.includes('doomscreen.mjs'), `must launch the compositor, got: ${cmd.slice(0, 160)}`);
+      assert(cmd.includes('--continue'), 'must resume the conversation (claude --continue)');
+      assert(/claude\.cmd|npm[\\/]claude/i.test(cmd), `must wrap the REAL claude by absolute path, got: ${cmd.slice(0, 200)}`);
+      assert(!cmd.includes('afk-arcade\\bin'), 'must NOT depend on the PATH shim');
+    });
+  }
+
   // ── conhost --headless roundtrip (win32 only) ──────────────────────────────
 
   if (process.platform === 'win32') {
