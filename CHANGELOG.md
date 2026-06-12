@@ -6,6 +6,65 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.0] — 2026-06-12
+
+### Added
+
+- **`scripts/doomscreen.mjs` — the universal backdrop (HANDOFF §4 + §5)**:
+  DOOM behind Claude Code in ANY terminal via pure text-cell composition,
+  ~15 fps (`AFK_DOOMSCREEN_FPS` 5–20). Claude runs inside a pseudo-terminal,
+  its screen lives in a vendored `@xterm/headless`, and the compositor
+  diff-paints game+claude cells wrapped in synchronized output
+  (`CSI ?2026`). Cursor mirrors Claude's virtual cursor (DECTCEM tracked
+  from the output stream).
+  - **Windows PTY layer**: `conhost.exe --headless` spawned directly from
+    node — zero dependencies, plain-text input, in-band resize
+    (`CSI 8;rows;cols t`, verified intercepted), exit-code propagation.
+    The documented `CreatePseudoConsole` route (PowerShell Add-Type
+    P/Invoke) was built first and dropped: its input pipe erratically
+    drops bytes on Win11 26200 (output path fine) — see engram topic
+    `claude-doom/conpty` for the full bisection.
+  - **§5 absorbed — keyboard capture with zero Tcl**: on Windows the
+    compositor owns stdin (raw mode). `F8` / `Ctrl+]` toggles claude ↔
+    marine; game keys flow through `decodeKeys` → `mapKeyEventToDoom` →
+    `control.json` (300 ms held-expiry, heartbeat sentinel release). A
+    badge overlay shows game-mode controls. The expect-based
+    `doomclaude.mjs` wrapper is now legacy (unix-only).
+  - `--selftest`: conhost VT roundtrip check (win32; trivially passes
+    elsewhere).
+- **`scripts/fetch-xterm.mjs`**: vendors `@xterm/headless` (MIT, pinned
+  5.5.0) into `vendor/xterm/` following the fetch-doom pattern; validates
+  by instantiating a Terminal and round-tripping a glyph. Auto-runs on
+  first doomscreen launch.
+- **`lib/compose.mjs`**: pure compositor core — `parseFrameRgb`,
+  `composeGrid` (claude-wins precedence, bg-49 legibility halo, full-bleed
+  frame scaling), `renderDiff` (changed-cell runs with gap bridging,
+  cursor parking), `xtermCellToCompose` (colour modes, attributes,
+  wide-char continuations).
+- **`test/screen.test.mjs`** (Phase I in `test/run.mjs`): 11 pure
+  compositor tests + win32-only conhost roundtrip + a full doomscreen e2e
+  drill (outer headless conhost provides the TTY; asserts typed input
+  composites back, F8 badge renders, and held `W` lands in `control.json`
+  as `KEY_UPARROW`).
+- **`/afk screen`**: prints the doomscreen launch command.
+
+### Changed
+
+- `scripts/daemon.mjs`: `raw-request.json` may now carry `{cols, rows}` —
+  the raw `frame.rgb` gets its own fullscreen dimensions, decoupled from
+  the banner viewport (which the statusline rewrites every second and
+  clamps to 80 px rows). Legacy empty-touch requests keep banner dims.
+
+### Fixed
+
+- `test/run.mjs`: async test failures were silent false positives (the
+  sync `test()` printed PASS before promises settled and `process.exit(0)`
+  outran the unhandled rejection); phases F–H counter snapshots wiped
+  their results from the summary (reported 35 when 59 ran). Both fixed in
+  the Windows-port commit series.
+
+---
+
 ## [0.8.0] — 2026-06-11
 
 ### Added

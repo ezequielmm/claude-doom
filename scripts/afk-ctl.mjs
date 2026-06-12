@@ -493,6 +493,27 @@ switch (cmd) {
     break;
   }
 
+  case 'screen': {
+    const screenScript = path.join(ROOT, 'scripts', 'doomscreen.mjs');
+    const screenCmd = `${process.execPath} --no-warnings ${screenScript}`;
+    const isWin = process.platform === 'win32';
+    process.stdout.write([
+      'Universal backdrop — DOOM behind Claude Code in ANY terminal.',
+      '',
+      'Run this in a fresh terminal (it launches claude inside):',
+      '',
+      `  ${screenCmd}`,
+      '',
+      isWin
+        ? 'Keyboard: F8 or Ctrl+] toggles your keys between Claude and the marine.'
+        : 'Keyboard flows natively to claude; use /afk control for game input.',
+      'Wrap a different command:  ' + screenCmd + ' -- <command> [args]',
+      'Tune fps with AFK_DOOMSCREEN_FPS (5..20, default 15).',
+      '',
+    ].join('\n'));
+    break;
+  }
+
   default: {
     process.stdout.write([
       'afk-arcade control CLI',
@@ -519,6 +540,8 @@ switch (cmd) {
       '  debug tail [n]       — print last n lines from debug.log (default: 30)',
       '  fetch-doom           — download DOOM WASM assets into vendor/doom/',
       '  play                 — print the command to play DOOM in a fresh terminal',
+      '  screen               — universal backdrop: DOOM behind Claude in ANY terminal',
+      '                         (text-cell compositor; F8 toggles keyboard on Windows)',
       '  setup [--yes] [--no-iterm]',
       '                       — one-shot installer: wires statusline, downloads DOOM assets,',
       '                         offers iTerm2 on macOS (--yes to accept all, --no-iterm to skip)',

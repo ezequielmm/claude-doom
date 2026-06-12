@@ -814,8 +814,19 @@ function writeFrame(engine, frameCount) {
     try {
       const rawReqStat = fs.statSync(RAW_REQUEST);
       if (Date.now() - rawReqStat.mtimeMs <= 30_000) {
-        const rgbW = gameW * 2;
-        const rgbH = pxRows;
+        // raw-request.json may carry its own {cols, rows} (terminal cells) —
+        // the compositor runs fullscreen, independent of the banner viewport
+        // (which the statusline rewrites every second and readViewport clamps
+        // to 80 px rows). Empty-touch requests keep banner-derived dims.
+        let rgbW = gameW * 2;
+        let rgbH = pxRows;
+        try {
+          const req = JSON.parse(fs.readFileSync(RAW_REQUEST, 'utf8'));
+          if (typeof req.cols === 'number' && typeof req.rows === 'number') {
+            rgbW = Math.max(40, Math.min(280, req.cols | 0)) * 2;
+            rgbH = Math.max(10, Math.min(100, req.rows | 0)) * 2;
+          }
+        } catch { /* not JSON — legacy touch file */ }
         const dim = typeof cfg.backdropDim === 'number'
           ? Math.min(1, Math.max(0.1, cfg.backdropDim))
           : 0.4;

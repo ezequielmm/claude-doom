@@ -19,6 +19,7 @@ import { runDebugTests } from './debug.test.mjs';
 import { runBotTests } from './bot.test.mjs';
 import { runControlTests } from './control.test.mjs';
 import { runWrapperTests } from './wrapper.test.mjs';
+import { runScreenTests } from './screen.test.mjs';
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -394,6 +395,10 @@ await runControlTests({ passed: { value: 0 }, failed: { value: 0 } }, { test });
 // ── Phase H: doomclaude wrapper + stdin-bridge tests ──────────────────────────
 
 await runWrapperTests({ passed: { value: 0 }, failed: { value: 0 } }, { test });
+
+// ── Phase I: universal compositor (doomscreen) tests ──────────────────────────
+
+await runScreenTests({ passed: { value: 0 }, failed: { value: 0 } }, { test });
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 

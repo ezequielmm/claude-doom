@@ -105,7 +105,7 @@ node <plugin>/scripts/fetch-doom.mjs
 
 ---
 
-## The Three Modes
+## The Four Modes
 
 ### 1. Statusline banner
 
@@ -147,6 +147,31 @@ The `--gfx auto` flag detects your terminal and picks the best protocol. For ter
 | WezTerm | Full (iTerm2 inline images) |
 | Warp | **Auto-probed** — pixel mode if your build speaks Kitty graphics, quadrant text otherwise |
 | Apple Terminal | Quadrant text fallback |
+
+### 4. Universal backdrop (doomscreen)
+
+DOOM as the background of your **entire terminal** with Claude Code floating on
+top — in ANY terminal, no graphics protocols, no extra tab. Pure text-cell
+composition at ~15 fps:
+
+```sh
+node scripts/doomscreen.mjs            # launches claude inside
+node scripts/doomscreen.mjs -- cmd     # wrap any other command
+```
+
+Claude runs inside a pseudo-terminal (`conhost.exe --headless` on Windows,
+`script(1)` on macOS/Linux) and its screen lives in a vendored
+`@xterm/headless` instance. Each tick the compositor merges the DOOM frame
+(quadrant glyphs) with Claude's cells — Claude wins wherever it has content,
+the game shows through everywhere else — and diff-paints only changed cells,
+wrapped in synchronized output.
+
+On Windows your keyboard is routed by the compositor itself: press **F8** (or
+`Ctrl+]`) and your keys drive the marine via `control.json` (the bot yields);
+press it again to give the keyboard back to Claude. No `expect`, no Tcl.
+
+Tune with `AFK_DOOMSCREEN_FPS` (5–20, default 15). `/afk screen` prints the
+launch command.
 
 ---
 
