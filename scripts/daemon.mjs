@@ -41,6 +41,12 @@ const BACKDROP_PNG = path.join(DOOM_TMP, 'backdrop.png');
 const BOT_STATUS   = path.join(DOOM_TMP, 'bot-status.json');
 // Written by scripts/control.mjs; daemon reads to detect user ownership.
 const CONTROL_JSON = path.join(DOOM_TMP, 'control.json');
+// Written when scripts/doomscreen.mjs requests raw RGB compositing frames.
+// Touch this file (with fresh mtime, ≤30s old) to opt in; daemon writes:
+//   frame.rgb  — binary [u16-LE width][u16-LE height][R G B ... pixels]
+//                scaled/dimmed to viewport pixel dimensions (cols*2 × pxRows)
+const RAW_REQUEST  = path.join(DOOM_TMP, 'raw-request.json');
+const FRAME_RGB    = path.join(DOOM_TMP, 'frame.rgb');
 
 // ── Memory belt constants ──────────────────────────────────────────────────────
 
@@ -767,6 +773,34 @@ function writeFrame(engine, frameCount) {
     lastFrameSignature = sig;
 
     writeAtomic(FRAME_ANS, ansContent);
+
+    // ── Raw RGB frame for compositor (doomscreen.mjs) ─────────────────────
+    // Written only when raw-request.json exists and was touched ≤30s ago.
+    // Dimensions: cols*2 × pxRows pixels (same quad-render resolution).
+    // Format: 4-byte header [u16-LE width][u16-LE height] + RGB bytes.
+    try {
+      const rawReqStat = fs.statSync(RAW_REQUEST);
+      if (Date.now() - rawReqStat.mtimeMs <= 30_000) {
+        const rgbW = gameW * 2;
+        const rgbH = pxRows;
+        const dim = typeof cfg.backdropDim === 'number'
+          ? Math.min(1, Math.max(0.1, cfg.backdropDim))
+          : 0.4;
+        const rgbBuf = buildScaledBuffer(engine.getPixel, engine.width, engine.height, rgbW, rgbH);
+        // Dim in-place (same dimming as backdrop so the game recedes)
+        for (let i = 0; i < rgbBuf.length; i++) rgbBuf[i] = (rgbBuf[i] * dim) | 0;
+        // Header: 4 bytes (u16-LE width, u16-LE height)
+        const header = Buffer.allocUnsafe(4);
+        header.writeUInt16LE(rgbW, 0);
+        header.writeUInt16LE(rgbH, 2);
+        const out = Buffer.concat([header, Buffer.from(rgbBuf)]);
+        const tmpRgb = FRAME_RGB + '.tmp';
+        fs.writeFileSync(tmpRgb, out);
+        fs.renameSync(tmpRgb, FRAME_RGB);
+      }
+    } catch {
+      // raw-request absent or write failed — non-fatal
+    }
 
     // Emit diagnostic log for sampled frames
     if (shouldLog) {
