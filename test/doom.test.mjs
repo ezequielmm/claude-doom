@@ -26,6 +26,33 @@ const DAEMON_SCRIPT = path.join(ROOT, 'scripts', 'daemon.mjs');
 const STATUS_SCRIPT = path.join(ROOT, 'scripts', 'statusline.mjs');
 const CTL_SCRIPT    = path.join(ROOT, 'scripts', 'afk-ctl.mjs');
 
+// Portable daemon shutdown: write this file so the daemon polls and exits cleanly.
+// On Windows, process.kill(pid,'SIGTERM') uses TerminateProcess and never fires the
+// SIGTERM handler, leaving the pidfile behind. Writing the shutdown file is the
+// cross-platform solution; we still send SIGTERM on non-Windows as a belt-and-suspenders.
+const DAEMON_SHUTDOWN_FILE = path.join(os.tmpdir(), 'afk-arcade', 'doom', 'daemon.shutdown');
+
+/**
+ * Request graceful daemon shutdown and wait for the pidfile to disappear.
+ * @param {number} daemonPid
+ * @returns {Promise<boolean>} true if pidfile disappeared within 5s
+ */
+async function shutdownDaemon(daemonPid) {
+  const pidFile = path.join(os.tmpdir(), 'afk-arcade', 'doom', 'daemon.pid');
+  // Write shutdown sentinel — the daemon polls this file every tick (30ms) and exits cleanly.
+  try { fs.writeFileSync(DAEMON_SHUTDOWN_FILE, String(daemonPid), 'utf8'); } catch { /* ignore */ }
+  // On non-Windows: also send SIGTERM as belt-and-suspenders (fires the SIGTERM handler).
+  // On Windows: do NOT send SIGTERM — process.kill uses TerminateProcess which is a hard
+  // synchronous kill; it would kill the daemon before the next tick fires and reads the
+  // shutdown file, leaving the pidfile behind.
+  if (process.platform !== 'win32') {
+    try { process.kill(daemonPid, 'SIGTERM'); } catch { /* ignore */ }
+  }
+  return waitFor(() => {
+    try { fs.statSync(pidFile); return false; } catch { return true; }
+  }, 5000, 100);
+}
+
 // ── Skip guard ────────────────────────────────────────────────────────────────
 
 function vendorPresent() {
@@ -169,6 +196,7 @@ tests.push({
     }, 20_000, 300);
 
     if (!ok) {
+      try { fs.writeFileSync(DAEMON_SHUTDOWN_FILE, String(child.pid), 'utf8'); } catch { /* ignore */ }
       try { process.kill(child.pid, 'SIGTERM'); } catch { /* ignore */ }
       throw new Error(`frame.ans not written within 20s (deadline ${deadline})`);
     }
@@ -215,7 +243,7 @@ tests.push({
       }
     }
 
-    // ── SIGTERM + cleanup ──────────────────────────────────────────────────────
+    // ── Shutdown + cleanup ─────────────────────────────────────────────────────
     let daemonPid = 0;
     try {
       daemonPid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
@@ -227,18 +255,10 @@ tests.push({
       throw new Error('daemon.pid contains invalid value');
     }
 
-    try {
-      process.kill(daemonPid, 'SIGTERM');
-    } catch {
-      throw new Error(`Failed to SIGTERM daemon pid ${daemonPid}`);
-    }
-
-    const pidGone = await waitFor(() => {
-      try { fs.statSync(pidFile); return false; } catch { return true; }
-    }, 5000, 100);
+    const pidGone = await shutdownDaemon(daemonPid);
 
     if (!pidGone) {
-      throw new Error('daemon.pid still present after SIGTERM');
+      throw new Error('daemon.pid still present after shutdown request');
     }
 
     return `frame.ans OK — gameW=${EXPECTED_GAME_W}, leftPad=${leadingSpaces}, pid ${daemonPid} cleaned up`;
@@ -356,6 +376,7 @@ tests.push({
     }, 20_000, 300);
 
     if (!ok) {
+      try { fs.writeFileSync(DAEMON_SHUTDOWN_FILE, String(child.pid), 'utf8'); } catch { /* ignore */ }
       try { process.kill(child.pid, 'SIGTERM'); } catch { /* ignore */ }
       throw new Error(`frame.ans not written within 20s (deadline ${deadline})`);
     }
@@ -389,7 +410,7 @@ tests.push({
       }
     }
 
-    // ── SIGTERM + cleanup ──────────────────────────────────────────────────────
+    // ── Shutdown + cleanup ─────────────────────────────────────────────────────
     let daemonPid = 0;
     try {
       daemonPid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
@@ -397,18 +418,10 @@ tests.push({
       throw new Error('daemon.pid not written');
     }
 
-    try {
-      process.kill(daemonPid, 'SIGTERM');
-    } catch {
-      throw new Error(`Failed to SIGTERM daemon pid ${daemonPid}`);
-    }
-
-    const pidGone = await waitFor(() => {
-      try { fs.statSync(pidFile); return false; } catch { return true; }
-    }, 5000, 100);
+    const pidGone = await shutdownDaemon(daemonPid);
 
     if (!pidGone) {
-      throw new Error('daemon.pid still present after SIGTERM');
+      throw new Error('daemon.pid still present after shutdown request');
     }
 
     // Restore aspect to 4:3 so other tests run with the default
@@ -439,13 +452,23 @@ export async function runDoomTests(counters, runner) {
 
   process.stdout.write('\n── doom tests ─────────────────────────────────────────\n');
 
-  // The daemon singleton is global (Unix socket): a live daemon from a real
-  // session would make the test daemons yield and the e2e tests fail. Kill it
-  // and clear its files — any live statusline respawns it within seconds.
-  spawnSync('pkill', ['-f', path.join(ROOT, 'scripts', 'daemon.mjs')]);
-  await new Promise((r) => setTimeout(r, 500));
+  // The daemon singleton is global: a live daemon from a real session would make
+  // the test daemons yield and the e2e tests fail. Shut it down gracefully and
+  // clear its files — any live statusline respawns it within seconds.
   const doomTmpDir = path.join(os.tmpdir(), 'afk-arcade', 'doom');
-  for (const f of ['daemon.pid', 'daemon.sock', 'spawn.lock']) {
+  const existingPidFile = path.join(doomTmpDir, 'daemon.pid');
+  try {
+    const existingPid = parseInt(fs.readFileSync(existingPidFile, 'utf8').trim(), 10);
+    if (existingPid > 0) {
+      await shutdownDaemon(existingPid);
+    }
+  } catch { /* no live daemon */ }
+  // On non-Windows, also try pkill as a belt-and-suspenders fallback
+  if (process.platform !== 'win32') {
+    spawnSync('pkill', ['-f', path.join(ROOT, 'scripts', 'daemon.mjs')]);
+  }
+  await new Promise((r) => setTimeout(r, 500));
+  for (const f of ['daemon.pid', 'daemon.sock', 'spawn.lock', 'daemon.shutdown']) {
     try { fs.rmSync(path.join(doomTmpDir, f), { recursive: true, force: true }); } catch { /* ignore */ }
   }
 

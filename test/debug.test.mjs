@@ -20,7 +20,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -101,7 +101,7 @@ await test('dbgLog writes parseable JSON line with ts and c fields', async () =>
     // Because ESM caches modules by resolved URL (not env), we use a sub-process
     // to get a fresh state.mjs + debug.mjs with our env set.
     const script = `
-      import { dbgLog } from '${path.join(ROOT, 'lib', 'debug.mjs')}';
+      import { dbgLog } from '${pathToFileURL(path.join(ROOT, 'lib', 'debug.mjs')).href}';
       dbgLog('test-component', { hello: 'world', num: 42 });
     `;
     const result = spawnSync(process.execPath, ['--input-type=module'], {
@@ -160,7 +160,7 @@ await test('rotation: file > 500 KB → renamed to debug.log.1, new line written
 
     // Call dbgLog via sub-process
     const script = `
-      import { dbgLog } from '${path.join(ROOT, 'lib', 'debug.mjs')}';
+      import { dbgLog } from '${pathToFileURL(path.join(ROOT, 'lib', 'debug.mjs')).href}';
       dbgLog('rotation-test', { trigger: true });
     `;
     const result = spawnSync(process.execPath, ['--input-type=module'], {

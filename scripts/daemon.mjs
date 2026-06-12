@@ -29,7 +29,11 @@ import { controlOwner } from '../lib/control-core.mjs';
 
 const DOOM_TMP     = path.join(TMP_ROOT, 'doom');
 const PIDFILE      = path.join(DOOM_TMP, 'daemon.pid');
-const SOCKFILE     = path.join(DOOM_TMP, 'daemon.sock');
+// On Windows, AF_UNIX bind to a file path fails with EACCES in most setups.
+// Use a Windows named pipe instead — same exclusive-bind singleton semantics.
+const SOCKFILE     = process.platform === 'win32'
+  ? '\\\\.\\pipe\\afk-arcade-daemon'
+  : path.join(DOOM_TMP, 'daemon.sock');
 const ERRFILE      = path.join(DOOM_TMP, 'daemon.err');
 const VIEWPORT     = path.join(DOOM_TMP, 'viewport.json');
 const FRAME_ANS    = path.join(DOOM_TMP, 'frame.ans');
@@ -41,6 +45,9 @@ const BACKDROP_PNG = path.join(DOOM_TMP, 'backdrop.png');
 const BOT_STATUS   = path.join(DOOM_TMP, 'bot-status.json');
 // Written by scripts/control.mjs; daemon reads to detect user ownership.
 const CONTROL_JSON = path.join(DOOM_TMP, 'control.json');
+// On Windows, SIGTERM via process.kill() calls TerminateProcess (no handler fires).
+// Writing this file is the portable shutdown signal — daemon polls and exits cleanly.
+const SHUTDOWN_FILE = path.join(DOOM_TMP, 'daemon.shutdown');
 // Written when scripts/doomscreen.mjs requests raw RGB compositing frames.
 // Touch this file (with fresh mtime, ≤30s old) to opt in; daemon writes:
 //   frame.rgb  — binary [u16-LE width][u16-LE height][R G B ... pixels]
@@ -85,6 +92,7 @@ function writeFatal(msg) {
 }
 
 // Inode of the socket file this process bound — 0 until the singleton is won.
+// On Windows (named pipe), inode tracking is skipped — pipes don't persist as files.
 let ownedSockIno = 0;
 
 /**
@@ -97,7 +105,9 @@ function removePidfile() {
     if (owner === process.pid) fs.unlinkSync(PIDFILE);
   } catch { /* missing or not ours */ }
   try {
-    if (ownedSockIno && fs.statSync(SOCKFILE).ino === ownedSockIno) {
+    // Named pipes (Windows) are not file-system objects; skip unlink for them.
+    if (!SOCKFILE.startsWith('\\\\.\\') &&
+        ownedSockIno && fs.statSync(SOCKFILE).ino === ownedSockIno) {
       fs.unlinkSync(SOCKFILE);
     }
   } catch { /* missing or not ours */ }
@@ -133,6 +143,10 @@ function acquireSingleton() {
       const srv = net.createServer((conn) => conn.destroy());
       srv.on('error', (err) => {
         if (err.code !== 'EADDRINUSE' || retried) {
+          process.exit(0);
+        }
+        // On Windows named pipes, EADDRINUSE always means a live server — yield.
+        if (process.platform === 'win32') {
           process.exit(0);
         }
         const probeOnce = (attempt) => {
@@ -313,12 +327,30 @@ async function main() {
   const BACKDROP_W = 640;
   const BACKDROP_H = 400;
 
+  // Clean up any stale shutdown file left from a previous run
+  try { fs.unlinkSync(SHUTDOWN_FILE); } catch { /* not present — ok */ }
+
   const tickTimer = setInterval(() => {
     try {
       engine.tick();
       tickCount++;
 
       const now = Date.now();
+
+      // ── Shutdown file poll (Windows-compatible graceful exit) ─────────
+      // On Windows, SIGTERM via process.kill uses TerminateProcess and never
+      // fires SIGTERM handlers. Polling a sentinel file is the portable way
+      // to request a clean shutdown that removes the pidfile.
+      try {
+        if (fs.existsSync(SHUTDOWN_FILE)) {
+          fs.unlinkSync(SHUTDOWN_FILE);
+          if (bot) { try { bot.dispose(); } catch {} }
+          clearInterval(tickTimer);
+          removePidfile();
+          cleanupDoomTmp();
+          process.exit(0);
+        }
+      } catch { /* ignore */ }
 
       // ── Memory belt: RSS self-check (~30s cadence) ───────────────────
       if (now - lastRssCheckAt >= RSS_CHECK_INTERVAL_MS) {
@@ -473,7 +505,8 @@ async function main() {
         // Self-defense: if our socket file vanished or was replaced (inode
         // changed), another daemon usurped the singleton — yield quietly and
         // leave all files to the new owner.
-        if (ownedSockIno) {
+        // Named pipes (Windows) cannot be stat'd by owner — skip this check.
+        if (ownedSockIno && !SOCKFILE.startsWith('\\\\.\\')) {
           let usurped = false;
           try { usurped = fs.statSync(SOCKFILE).ino !== ownedSockIno; } catch { usurped = true; }
           if (usurped) {

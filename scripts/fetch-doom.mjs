@@ -173,7 +173,12 @@ async function fetchOpentUiDoom() {
 
   // Extract only the two files we need
   // npm tarballs prefix all paths with "package/"
-  execFileSync('tar', [
+  // On Windows, use the inbox bsdtar (System32\tar.exe) which handles drive-letter
+  // paths natively. GNU tar (MSYS/Git Bash) misinterprets "C:" as a remote host.
+  const tarBin = process.platform === 'win32'
+    ? path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe')
+    : 'tar';
+  execFileSync(tarBin, [
     '-xzf', tgzPath,
     '-C', extractDir,
     '--strip-components=1',       // strip "package/"
@@ -190,8 +195,12 @@ async function fetchOpentUiDoom() {
     throw new Error(`Extraction failed — expected files not found in ${extractDir}`);
   }
 
-  fs.renameSync(extractedJs,   doom_js);
-  fs.renameSync(extractedWasm, doom_wasm);
+  // Use copy+unlink instead of rename to handle cross-device moves
+  // (e.g. tmpdir on C: while vendor/ is on D: on Windows).
+  fs.copyFileSync(extractedJs,   doom_js);
+  fs.unlinkSync(extractedJs);
+  fs.copyFileSync(extractedWasm, doom_wasm);
+  fs.unlinkSync(extractedWasm);
 
   // Cleanup tmp dir
   try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
