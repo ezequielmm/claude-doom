@@ -57,7 +57,22 @@ let failed = 0;
 
 function test(name, fn) {
   try {
-    fn();
+    const r = fn();
+    // Async test: settle before reporting. Without this, a rejected promise
+    // printed PASS and the final process.exit(0) outran the unhandled
+    // rejection — every async test failure was a silent false positive.
+    if (r && typeof r.then === 'function') {
+      return r.then(
+        () => {
+          process.stdout.write(`PASS  ${name}\n`);
+          passed++;
+        },
+        (err) => {
+          process.stdout.write(`FAIL  ${name}\n      ${err.message}\n`);
+          failed++;
+        },
+      );
+    }
     process.stdout.write(`PASS  ${name}\n`);
     passed++;
   } catch (err) {
@@ -366,24 +381,19 @@ failed = debugCounters.failed.value;
 
 // ── Phase F: bot + registry unit tests ───────────────────────────────────────
 
-const botCounters = { passed: { value: passed }, failed: { value: failed } };
-await runBotTests(botCounters, { test });
-passed = botCounters.passed.value;
-failed = botCounters.failed.value;
+// Phases F-H count through test() directly (module-level passed/failed).
+// Reassigning from a boxed pre-phase snapshot here wiped their results —
+// the dummy boxes below only satisfy the runner signatures.
+
+await runBotTests({ passed: { value: 0 }, failed: { value: 0 } }, { test });
 
 // ── Phase G: control-core + bot handoff tests ─────────────────────────────────
 
-const controlCounters = { passed: { value: passed }, failed: { value: failed } };
-await runControlTests(controlCounters, { test });
-passed = controlCounters.passed.value;
-failed = controlCounters.failed.value;
+await runControlTests({ passed: { value: 0 }, failed: { value: 0 } }, { test });
 
 // ── Phase H: doomclaude wrapper + stdin-bridge tests ──────────────────────────
 
-const wrapperCounters = { passed: { value: passed }, failed: { value: failed } };
-await runWrapperTests(wrapperCounters, { test });
-passed = wrapperCounters.passed.value;
-failed = wrapperCounters.failed.value;
+await runWrapperTests({ passed: { value: 0 }, failed: { value: 0 } }, { test });
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 

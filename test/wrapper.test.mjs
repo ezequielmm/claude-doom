@@ -324,6 +324,18 @@ export async function runWrapperTests(counters, { test: testFn }) {
 
   // ── Test 8: doomclaude --selftest exits 0 ────────────────────────────────
 
+  // The F8 wrapper drives /usr/bin/expect + /usr/bin/script — unix-only by
+  // design (HANDOFF §5: it gets retired once the compositor absorbs input).
+  // On win32 those binaries cannot exist; skip rather than report noise.
+  const WRAPPER_UNSUPPORTED = process.platform === 'win32';
+
+  if (WRAPPER_UNSUPPORTED) {
+    process.stdout.write(
+      'SKIP  doomclaude selftests (3) — expect/script PTY wrapper is unix-only\n',
+    );
+    return;
+  }
+
   await testFn('doomclaude: --selftest exits 0 (PTY mechanism works)', async () => {
     const result = spawnSync(NODE, ['--no-warnings', DOOMCLAUDE_SCRIPT, '--selftest'], {
       encoding: 'utf8',

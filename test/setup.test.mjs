@@ -69,6 +69,9 @@ function runAutoSetup(fakeHome, extraEnv = {}) {
       env: {
         ...process.env,
         HOME: fakeHome,
+        // os.homedir() reads USERPROFILE on win32 — without this override the
+        // subprocess resolves the REAL home and mutates the user's settings.json.
+        USERPROFILE: fakeHome,
         AFK_ARCADE_CONFIG_DIR: configDir,
         CLAUDE_PLUGIN_ROOT: ROOT,
         ...extraEnv,
@@ -119,6 +122,14 @@ await test('auto-setup on empty HOME: creates config, shim, adds statusLine, bac
     const shimContent = fs.readFileSync(shimPath, 'utf8');
     assert(shimContent.includes(ROOT), `Shim must reference pluginRoot. Got: ${shimContent}`);
     assert(shimContent.startsWith('#!/bin/bash'), 'Shim must start with #!/bin/bash');
+
+    // win32 also gets a .cmd twin — that's what settings.json points at there
+    if (process.platform === 'win32') {
+      const cmdShimPath = path.join(configDir, 'statusline.cmd');
+      assert(fs.existsSync(cmdShimPath), 'statusline.cmd must exist after auto-setup on win32');
+      const cmdContent = fs.readFileSync(cmdShimPath, 'utf8');
+      assert(cmdContent.includes(ROOT), `cmd shim must reference pluginRoot. Got: ${cmdContent}`);
+    }
 
     // settings.json must have statusLine key
     const settingsPath = path.join(fakeHome, '.claude', 'settings.json');
