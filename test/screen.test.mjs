@@ -286,6 +286,82 @@ export async function runScreenTests(counters, { test: testFn }) {
     process.stdout.write('SKIP  conhost --headless roundtrip — win32 only\n');
     process.stdout.write('SKIP  doomscreen e2e — win32 only\n');
   }
+
+  // ── Compositor-implied bot (daemon contract, needs vendor assets) ──────────
+
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const vendorOk = ['doom.js', 'doom.wasm', 'doom1.wad'].every((f) => {
+    try { return fs.statSync(path.join(ROOT, 'vendor', 'doom', f)).size > 1000; }
+    catch { return false; }
+  });
+
+  if (vendorOk) {
+    await testFn('daemon: fresh raw-request implies bot even with config.bot=false', async () => {
+      const doomTmp = path.join(os.tmpdir(), 'afk-arcade', 'doom');
+      const pidFile = path.join(doomTmp, 'daemon.pid');
+      const shutdownFile = path.join(doomTmp, 'daemon.shutdown');
+      const botStatus = path.join(doomTmp, 'bot-status.json');
+      const rawRequest = path.join(doomTmp, 'raw-request.json');
+
+      const waitFor = (pred, maxMs, step = 250) => new Promise((resolve) => {
+        const deadline = Date.now() + maxMs;
+        const poll = () => {
+          if (pred()) return resolve(true);
+          if (Date.now() > deadline) return resolve(false);
+          setTimeout(poll, step);
+        };
+        poll();
+      });
+      const shutdown = async () => {
+        try { fs.writeFileSync(shutdownFile, 'screen-test'); } catch { /* ignore */ }
+        await waitFor(() => { try { fs.statSync(pidFile); return false; } catch { return true; } }, 6000);
+      };
+
+      // The daemon is a machine-wide singleton (named pipe on win32) — stop
+      // any live instance first, exactly like the doom phase does.
+      try {
+        const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+        if (pid > 0) await shutdown();
+      } catch { /* none running */ }
+      for (const f of [botStatus, rawRequest, shutdownFile]) {
+        try { fs.unlinkSync(f); } catch { /* absent */ }
+      }
+
+      // Isolated config dir with bot explicitly OFF
+      const cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-screen-cfg-'));
+      fs.writeFileSync(path.join(cfgDir, 'config.json'), JSON.stringify({
+        enabled: true, game: 'fire', rows: 5, bot: false,
+      }));
+
+      const daemon = spawn(process.execPath,
+        ['--no-warnings', path.join(ROOT, 'scripts', 'daemon.mjs')],
+        { env: { ...process.env, AFK_ARCADE_CONFIG_DIR: cfgDir }, stdio: 'ignore', detached: true });
+      daemon.unref();
+
+      try {
+        const booted = await waitFor(() => {
+          try { return fs.statSync(pidFile).size > 0; } catch { return false; }
+        }, 15_000);
+        assert(booted, 'daemon must boot (pidfile)');
+
+        // No raw-request yet → no bot block → no bot-status.json
+        await new Promise((r) => setTimeout(r, 3500));
+        assert(!fs.existsSync(botStatus),
+          'bot-status.json must NOT appear while config.bot=false and no compositor');
+
+        // Compositor arrives
+        fs.writeFileSync(rawRequest, JSON.stringify({ cols: 60, rows: 20 }));
+        const botLive = await waitFor(() => fs.existsSync(botStatus), 20_000);
+        assert(botLive, 'bot-status.json must appear once raw-request is fresh (implied bot)');
+      } finally {
+        await shutdown();
+        try { fs.rmSync(cfgDir, { recursive: true, force: true }); } catch { /* ignore */ }
+      }
+    });
+  } else {
+    process.stdout.write('SKIP  compositor-implied bot — vendor/doom assets absent\n');
+  }
 }
 
 // ── Standalone runner ─────────────────────────────────────────────────────────

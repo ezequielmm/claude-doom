@@ -323,6 +323,10 @@ async function main() {
     }
   }
 
+  // Compositor-implied bot probe state (see tick loop)
+  let lastRawProbeAt = 0;
+  let rawActiveUntil = 0;
+
   // Backdrop streaming constants
   const BACKDROP_W = 640;
   const BACKDROP_H = 400;
@@ -371,6 +375,28 @@ async function main() {
         // The flag is consumed on the next backdrop streaming write,
         // prepending a delete APC in the same single writeSync call.
         pendingKittyDelete = true;
+      }
+
+      // ── Compositor-implied bot ─────────────────────────────────────────
+      // A fresh raw-request.json means doomscreen is compositing fullscreen:
+      // DOOM must be ALIVE (the bot taps ENTER past the title and plays) and
+      // the control.json arbitration must run so F8 user input reaches the
+      // engine — BOTH live inside the bot block below. Create the bot lazily
+      // even when config.bot is off; drop it when the compositor leaves.
+      if (now - lastRawProbeAt >= 2000) {
+        lastRawProbeAt = now;
+        try {
+          rawActiveUntil = fs.statSync(RAW_REQUEST).mtimeMs + 35_000;
+        } catch { rawActiveUntil = 0; }
+        if (!bot && now < rawActiveUntil) {
+          try { bot = createBot(engine); } catch { /* continue without bot */ }
+        } else if (bot && now >= rawActiveUntil && _initCfg.bot !== true) {
+          // Compositor gone and config never asked for a bot — back to attract
+          try { bot.suspend(); } catch { /* ignore */ }
+          try { bot.dispose(); } catch { /* ignore */ }
+          bot = null;
+          currentOwner = 'bot';
+        }
       }
 
       // ── Bot / user-controller update ───────────────────────────────────

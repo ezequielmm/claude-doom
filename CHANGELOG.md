@@ -50,6 +50,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `scripts/daemon.mjs`: **compositor-implied bot** — a fresh
+  `raw-request.json` lazily creates the bot even when `config.bot` is off,
+  because both "start the game past the attract demo" AND the
+  `control.json` ownership arbitration (F8 user input) live inside the
+  daemon's bot block. The bot is disposed again when the compositor
+  leaves. Without this, doomscreen booted into DOOM's demo loop and F8
+  keys never reached the engine.
 - `scripts/daemon.mjs`: `raw-request.json` may now carry `{cols, rows}` —
   the raw `frame.rgb` gets its own fullscreen dimensions, decoupled from
   the banner viewport (which the statusline rewrites every second and
