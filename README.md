@@ -529,7 +529,7 @@ This plugin's code is released under the [MIT License](./LICENSE).
 ---
 
 <p align="center">
-  Made with care by <strong>Gentleman Programming</strong>
+  Made with care by <strong>Ezequiel Mora Martinez</strong>
   <br />
   If this made your terminal more fun, consider giving it a ⭐ on <a href="https://github.com/ezequielmm/claude-doom">GitHub</a>.
 </p>

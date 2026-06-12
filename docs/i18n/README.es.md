@@ -470,7 +470,7 @@ El código de este plugin se publica bajo la [Licencia MIT](../../LICENSE).
 ---
 
 <p align="center">
-  Hecho con cuidado por <strong>Gentleman Programming</strong>
+  Hecho con cuidado por <strong>Ezequiel Mora Martinez</strong>
   <br />
   Si esto hizo tu terminal más entretenida, considera darle una ⭐ en <a href="https://github.com/ezequielmm/claude-doom">GitHub</a>.
 </p>

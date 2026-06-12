@@ -1,7 +1,7 @@
 {
   "name": "afk-arcade-marketplace",
   "description": "Games inside Claude Code — real DOOM in your statusline",
-  "owner": { "name": "Gentleman Programming" },
+  "owner": { "name": "Ezequiel Mora Martinez" },
   "plugins": [
     {
       "name": "afk-arcade",
