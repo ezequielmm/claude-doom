@@ -29,17 +29,20 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { TMP_ROOT } from '../lib/state.mjs';
+import { TMP_ROOT, readConfig } from '../lib/state.mjs';
 import { parseFrameRgb } from '../lib/compose.mjs';
 import { encodePngFast } from '../lib/png.mjs';
 import {
   extractOrder, frameToAsciiGrid, buildOrderPrompt, BRAIN_PROMPT, extractPlan,
+  extractGbaStep, POKEMON_PROMPT, GBA_BUTTON_CODES,
 } from '../lib/brain-core.mjs';
+import { buildControlState } from '../lib/control-core.mjs';
 
 const DOOM_TMP     = path.join(TMP_ROOT, 'doom');
 const FRAME_RGB    = path.join(DOOM_TMP, 'frame.rgb');
 const RAW_REQUEST  = path.join(DOOM_TMP, 'raw-request.json');
 const BRAIN_ORDERS = path.join(DOOM_TMP, 'brain-orders.json');
+const CONTROL_JSON = path.join(DOOM_TMP, 'control.json');
 const STATUS_FILE  = path.join(DOOM_TMP, 'doombrain-status.json');
 const STOP_FILE    = path.join(DOOM_TMP, 'doombrain.stop');
 const FRAME_PNG    = path.join(DOOM_TMP, 'doombrain-frame.png');
@@ -47,8 +50,15 @@ const FRAME_PNG    = path.join(DOOM_TMP, 'doombrain-frame.png');
 const MODEL    = process.env.AFK_BRAIN_MODEL ?? 'haiku';
 const INTERVAL = Math.max(3000, parseInt(process.env.AFK_BRAIN_INTERVAL ?? '8000', 10) || 8000);
 const MAX_MS   = Math.max(1, parseInt(process.env.AFK_BRAIN_MINUTES ?? '30', 10) || 30) * 60_000;
-const USE_PNG  = process.env.AFK_BRAIN_VISION === 'png';
-const MEMORY_NOTES = 6;
+// Game profile: 'doom' (FPS cortex → orders) or 'pokemon'/'gba' (vision pilot
+// reading on-screen text → button taps via control.json). AFK_BRAIN_GAME, or
+// inferred from config.game at boot.
+const GAME = (process.env.AFK_BRAIN_GAME ?? '').toLowerCase();
+const POKEMON = GAME === 'pokemon' || GAME === 'gba'
+  || (() => { try { return ['gba'].includes(readConfig().game); } catch { return false; } })();
+const USE_PNG  = POKEMON || process.env.AFK_BRAIN_VISION === 'png';
+const MEMORY_NOTES = POKEMON ? 8 : 6;
+let tapSeq = 1;
 
 const startedAt = Date.now();
 let decisions = 0;
@@ -61,7 +71,8 @@ function writeStatus(extra) {
   try {
     const tmp = STATUS_FILE + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify({
-      pid: process.pid, model: MODEL, mode: USE_PNG ? 'png' : 'ascii',
+      pid: process.pid, model: MODEL,
+      mode: POKEMON ? 'pokemon' : USE_PNG ? 'png' : 'ascii',
       decisions, failures, note: lastNote, updatedAt: Date.now(), ...extra,
     }));
     fs.renameSync(tmp, STATUS_FILE);
@@ -100,9 +111,8 @@ function decide() {
     return;
   }
 
-  let order = null;
-  if (USE_PNG) {
-    // Vision mode: upscaled, dim-corrected PNG + the legacy plan prompt
+  // Write an upscaled, dim-corrected PNG for any vision path
+  function snapshotPng() {
     const scale = frame.w >= 220 ? 3 : 4;
     const W = frame.w * scale;
     const H = frame.h * scale;
@@ -119,6 +129,36 @@ function decide() {
     const tmp = FRAME_PNG + '.tmp';
     fs.writeFileSync(tmp, encodePngFast(out, W, H));
     fs.renameSync(tmp, FRAME_PNG);
+  }
+
+  // ── Pokémon / GBA pilot: read the screen text, press buttons ──────────────
+  if (POKEMON) {
+    snapshotPng();
+    const reply = callModel(`Read the file ${FRAME_PNG} (a Game Boy Advance screen). ${POKEMON_PROMPT}`, true);
+    const step = extractGbaStep(reply);
+    if (step && step.buttons.length) {
+      // Each button → a tap; the daemon pulses down+up (~80ms) per tap. A
+      // staggered seq lets the daemon process them as distinct presses.
+      const taps = step.buttons.map((b) => ({ seq: tapSeq++, code: GBA_BUTTON_CODES[b] }));
+      try {
+        const tmp = CONTROL_JSON + '.tmp';
+        fs.writeFileSync(tmp, JSON.stringify(buildControlState([], taps, tapSeq)));
+        fs.renameSync(tmp, CONTROL_JSON);
+      } catch { /* daemon reads the next one */ }
+      decisions++;
+      lastNote = `[${step.buttons.join('+')}] ${step.note}`;
+      memory.push(`[${new Date().toISOString().slice(11, 19)}] ${lastNote}`);
+      if (memory.length > MEMORY_NOTES) memory.shift();
+    } else {
+      failures++;
+    }
+    writeStatus({ lastModelMs: Date.now() });
+    return;
+  }
+
+  let order = null;
+  if (USE_PNG) {
+    snapshotPng();
     const reply = callModel(
       `Read the file ${FRAME_PNG} (a DOOM screenshot). ${BRAIN_PROMPT}`, true);
     // Translate a tactical plan into the nearest strategic order
@@ -157,7 +197,7 @@ function decide() {
 async function main() {
   try { fs.unlinkSync(STOP_FILE); } catch { /* clean start */ }
   process.stdout.write(
-    `doombrain: cortex mode=${USE_PNG ? 'png' : 'ascii'} model=${MODEL} ` +
+    `doombrain: mode=${POKEMON ? 'pokemon' : USE_PNG ? 'png' : 'ascii'} model=${MODEL} ` +
     `interval=${INTERVAL}ms max=${MAX_MS / 60000}min\n`);
 
   // Keep raw frames flowing even without a compositor attached

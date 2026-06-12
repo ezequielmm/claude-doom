@@ -10,6 +10,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Pokémon / GBA brain** — in GBA mode `/afk brain on` runs a vision pilot:
+  a cheap model reads the actual on-screen TEXT each turn (dialog boxes,
+  menus, battle prompts) and presses buttons via `control.json` taps.
+  `lib/brain-core.mjs` gains `POKEMON_PROMPT`, `extractGbaStep`
+  (button-sequence parser: filters unknown buttons, caps at 6, `press`
+  alias), and `GBA_BUTTON_CODES` (A/B → USE/FIRE wire codes, etc.).
+  doombrain auto-detects GBA from config (or `AFK_BRAIN_GAME=pokemon`).
+  Live e2e: the pilot read a frame and pressed RIGHT with the note
+  "Dark cave/dungeon … Exploring forward." — "Claude Plays Pokémon"
+  behind your coding session.
+
 - **Game Boy Advance mode** — the pipeline is officially game-agnostic:
   `lib/gba-engine.mjs` adapts gbajs (pure-JS GBA core, vendored with
   `scripts/fetch-gba.mjs` + tonc homebrew test demos) to the same engine

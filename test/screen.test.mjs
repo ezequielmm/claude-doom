@@ -230,6 +230,21 @@ export async function runScreenTests(counters, { test: testFn }) {
     assert(extractPlan('{broken') === null, 'broken JSON → null');
   });
 
+  await testFn('pokemon brain: extractGbaStep reads buttons + dialog, filters junk, caps length', async () => {
+    const { extractGbaStep, GBA_BUTTON_CODES } = await import('../lib/brain-core.mjs');
+    const dlg = extractGbaStep('ok ```json\n{"buttons":["a"],"note":"PROF OAK: Are you a boy?"}\n```');
+    assert(dlg && dlg.buttons.length === 1 && dlg.buttons[0] === 'a', `dialog advance, got ${JSON.stringify(dlg)}`);
+    assert(dlg.note.includes('OAK'), 'note carries the read text');
+    const menu = extractGbaStep('{"buttons":["down","down","a","jump","select"],"note":"menu"}');
+    assert(JSON.stringify(menu.buttons) === '["down","down","a","select"]',
+      `invalid "jump" dropped, valid kept, got ${JSON.stringify(menu.buttons)}`);
+    const overrun = extractGbaStep('{"buttons":["a","a","a","a","a","a","a","a"]}');
+    assert(overrun.buttons.length === 6, `capped at 6, got ${overrun.buttons.length}`);
+    assert(extractGbaStep('{"press":"start"}').buttons[0] === 'start', 'press alias works');
+    assert(GBA_BUTTON_CODES.a === 0xa2 && GBA_BUTTON_CODES.b === 0xa3, 'A/B map to USE/FIRE wire codes');
+    assert(extractGbaStep('no json here') === null, 'prose → null');
+  });
+
   await testFn('brain: planHeldKeys expires the turn, keeps movement and fire', async () => {
     const { extractPlan, planHeldKeys } = await import('../lib/brain-core.mjs');
     const plan = extractPlan('{"move":"forward","turn":"right","turnMs":400,"fire":true}');

@@ -653,8 +653,12 @@ switch (cmd) {
       const logPath = path.join(os.homedir(), '.claude', 'afk-arcade', 'brain.log');
       fs.mkdirSync(path.dirname(logPath), { recursive: true });
       const logFd = fs.openSync(logPath, 'a');
+      // In GBA mode the brain auto-switches to the vision pilot that reads
+      // on-screen text (Pokémon dialog/menus) and presses buttons.
+      const brainEnv = { ...process.env };
+      try { if (readConfig().game === 'gba') brainEnv.AFK_BRAIN_GAME = 'pokemon'; } catch { /* default */ }
       const child = spawn(process.execPath, ['--no-warnings', brainScript], {
-        detached: true, stdio: ['ignore', logFd, logFd],
+        detached: true, stdio: ['ignore', logFd, logFd], env: brainEnv,
       });
       child.unref();
       fs.closeSync(logFd);

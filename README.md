@@ -92,11 +92,16 @@ The whole pipeline is game-agnostic. Bring your own legally-dumped GBA ROM
 /afk game gba                     # fetches the emulator (gbajs) on first use
 ```
 
-Battery saves persist to `~/.claude/afk-arcade/saves/` (FireRed's Flash 1M
-included), the emulator paces itself to the GBA's real ~60 fps regardless of
-daemon cadence, and F8 maps your keys to the pad: arrows = D-pad,
-Space = A, F = B, Enter = Start, Esc = Select, 1/2 = L/R.
-Switch back anytime with `/afk game doom`.
+Battery saves persist to `~/.claude/afk-arcade/saves/` (Flash 1M included),
+the emulator paces itself to the GBA's real ~60 fps regardless of daemon
+cadence, and F8 maps your keys to the pad: arrows = D-pad, Space = A, F = B,
+Enter = Start, Esc = Select, 1/2 = L/R. Switch back with `/afk game doom`.
+
+**And Claude can play it.** In GBA mode, `/afk brain on` becomes a vision
+pilot: a cheap model reads the actual on-screen text each turn — dialog
+boxes, menus, battle prompts — and presses buttons accordingly. It's
+"Claude Plays Pokémon" running behind your coding session. (`/afk brain
+status` shows what it just read.)
 
 On the first `SessionStart` the auto-setup hook:
 - Creates `~/.claude/afk-arcade/config.json` with DOOM-first defaults.
