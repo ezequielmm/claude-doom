@@ -508,7 +508,7 @@ switch (cmd) {
         ? 'Keyboard: F8 or Ctrl+] toggles your keys between Claude and the marine.'
         : 'Keyboard flows natively to claude; use /afk control for game input.',
       'Wrap a different command:  ' + screenCmd + ' -- <command> [args]',
-      'Tune fps with AFK_DOOMSCREEN_FPS (5..20, default 15).',
+      'Tune fps with AFK_DOOMSCREEN_FPS (5..35, default 24).',
       '',
     ].join('\n'));
     break;

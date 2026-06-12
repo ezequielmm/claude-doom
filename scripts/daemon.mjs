@@ -255,6 +255,14 @@ async function main() {
   let cachedRegistry = {};
   let streamFrameCount = 0;
 
+  // Raw frame.rgb streaming cadence (compositor fast path) — same fps knob
+  // as backdrop streaming. The 250ms writeFrame path is banner-paced; the
+  // compositor needs game frames at real speed.
+  let lastRawStreamAt = 0;
+  let lastRawReqCheckAt = 0;
+  let rawReqActive = false;
+  let rawReqDims = null; // {cols, rows} from raw-request.json, when present
+
   // Bot status write cadence
   const BOT_STATUS_INTERVAL_MS = 1000;
   let lastBotStatusAt = 0;
@@ -671,6 +679,48 @@ async function main() {
           }
         }
       }
+
+      // ── Raw frame.rgb fast streaming (compositor / doomscreen) ────────
+      // The writeFrame path runs at banner pace (250ms = 4fps); the
+      // compositor needs real-speed game frames. While raw-request.json is
+      // fresh, stream frame.rgb at backdropFps (default 24, up to 35).
+      if (now - lastRawReqCheckAt >= 1000) {
+        lastRawReqCheckAt = now;
+        try {
+          const st = fs.statSync(RAW_REQUEST);
+          rawReqActive = now - st.mtimeMs <= 30_000;
+          if (rawReqActive) {
+            try {
+              const req = JSON.parse(fs.readFileSync(RAW_REQUEST, 'utf8'));
+              rawReqDims = (typeof req.cols === 'number' && typeof req.rows === 'number')
+                ? { cols: req.cols | 0, rows: req.rows | 0 }
+                : null;
+            } catch { rawReqDims = null; }
+          }
+        } catch { rawReqActive = false; }
+      }
+      if (rawReqActive && now - lastRawStreamAt >= streamInterval) {
+        lastRawStreamAt = now;
+        try {
+          const vpDims = rawReqDims ?? { cols: readViewport().cols, rows: 25 };
+          const rgbW = Math.max(80, Math.min(560, vpDims.cols * 2));
+          const rgbH = Math.max(20, Math.min(200, vpDims.rows * 2));
+          const dim = typeof cfg.backdropDim === 'number'
+            ? Math.min(1, Math.max(0.1, cfg.backdropDim))
+            : 0.4;
+          const fullRgb = engine.getFrameRGB();
+          const fastPixel = bufferGetPixel(fullRgb, engine.width);
+          const rgbBuf = buildScaledBuffer(fastPixel, engine.width, engine.height, rgbW, rgbH);
+          for (let i = 0; i < rgbBuf.length; i++) rgbBuf[i] = (rgbBuf[i] * dim) | 0;
+          const header = Buffer.allocUnsafe(4);
+          header.writeUInt16LE(rgbW, 0);
+          header.writeUInt16LE(rgbH, 2);
+          const out = Buffer.concat([header, Buffer.from(rgbBuf)]);
+          const tmpRgb = FRAME_RGB + '.tmp';
+          fs.writeFileSync(tmpRgb, out);
+          fs.renameSync(tmpRgb, FRAME_RGB);
+        } catch { /* non-fatal — compositor keeps last frame */ }
+      }
     } catch {
       // Engine error — stop ticking but keep process alive for pidfile cleanup
     }
@@ -833,44 +883,9 @@ function writeFrame(engine, frameCount) {
 
     writeAtomic(FRAME_ANS, ansContent);
 
-    // ── Raw RGB frame for compositor (doomscreen.mjs) ─────────────────────
-    // Written only when raw-request.json exists and was touched ≤30s ago.
-    // Dimensions: cols*2 × pxRows pixels (same quad-render resolution).
-    // Format: 4-byte header [u16-LE width][u16-LE height] + RGB bytes.
-    try {
-      const rawReqStat = fs.statSync(RAW_REQUEST);
-      if (Date.now() - rawReqStat.mtimeMs <= 30_000) {
-        // raw-request.json may carry its own {cols, rows} (terminal cells) —
-        // the compositor runs fullscreen, independent of the banner viewport
-        // (which the statusline rewrites every second and readViewport clamps
-        // to 80 px rows). Empty-touch requests keep banner-derived dims.
-        let rgbW = gameW * 2;
-        let rgbH = pxRows;
-        try {
-          const req = JSON.parse(fs.readFileSync(RAW_REQUEST, 'utf8'));
-          if (typeof req.cols === 'number' && typeof req.rows === 'number') {
-            rgbW = Math.max(40, Math.min(280, req.cols | 0)) * 2;
-            rgbH = Math.max(10, Math.min(100, req.rows | 0)) * 2;
-          }
-        } catch { /* not JSON — legacy touch file */ }
-        const dim = typeof cfg.backdropDim === 'number'
-          ? Math.min(1, Math.max(0.1, cfg.backdropDim))
-          : 0.4;
-        const rgbBuf = buildScaledBuffer(engine.getPixel, engine.width, engine.height, rgbW, rgbH);
-        // Dim in-place (same dimming as backdrop so the game recedes)
-        for (let i = 0; i < rgbBuf.length; i++) rgbBuf[i] = (rgbBuf[i] * dim) | 0;
-        // Header: 4 bytes (u16-LE width, u16-LE height)
-        const header = Buffer.allocUnsafe(4);
-        header.writeUInt16LE(rgbW, 0);
-        header.writeUInt16LE(rgbH, 2);
-        const out = Buffer.concat([header, Buffer.from(rgbBuf)]);
-        const tmpRgb = FRAME_RGB + '.tmp';
-        fs.writeFileSync(tmpRgb, out);
-        fs.renameSync(tmpRgb, FRAME_RGB);
-      }
-    } catch {
-      // raw-request absent or write failed — non-fatal
-    }
+    // Raw frame.rgb for the compositor is streamed from the TICK loop at
+    // backdropFps (see "Raw frame.rgb fast streaming") — this 250ms
+    // writeFrame path is banner-paced, far too slow for fullscreen play.
 
     // Emit diagnostic log for sampled frames
     if (shouldLog) {

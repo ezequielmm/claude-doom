@@ -24,7 +24,7 @@
  *
  * Usage:
  *   node scripts/doomscreen.mjs [--selftest] [-- <command> [args…]]
- *   AFK_DOOMSCREEN_FPS   compositor rate, 5..20 (default 15)
+ *   AFK_DOOMSCREEN_FPS   compositor rate, 5..35 (default 24)
  *   AFK_DOOMSCREEN_CMD   wrapped command (default "claude") — drills use cmd.exe
  *   AFK_DOOMSCREEN_DEBUG=1  JSONL telemetry via lib/debug.mjs
  */
@@ -51,8 +51,8 @@ const CONTROL_JSON = path.join(DOOM_TMP, 'control.json');
 const PID_FILE     = path.join(DOOM_TMP, 'daemon.pid');
 const SPAWN_LOCK   = path.join(DOOM_TMP, 'spawn.lock');
 
-const FPS = Math.max(5, Math.min(20,
-  parseInt(process.env.AFK_DOOMSCREEN_FPS ?? '15', 10) || 15));
+const FPS = Math.max(5, Math.min(35,
+  parseInt(process.env.AFK_DOOMSCREEN_FPS ?? '24', 10) || 24));
 /** A frozen frame older than this is dropped (hides daemon recycles). */
 const FRAME_FRESH_MS = 12_000;
 /** Toggle keys: F8 (CSI 19~) and Ctrl+] (0x1d, survives chunk splits). */
@@ -328,7 +328,9 @@ async function main() {
 
   const { child, routedInput } = spawnPty(cmdArgs, cols, rows);
 
+  let termGen = 0; // bumped on every child output chunk — compose skip key
   child.stdout.on('data', (chunk) => {
+    termGen++;
     term.write(chunk);
     // Track DECTCEM so the real cursor mirrors claude's (xterm doesn't expose it)
     const s = chunk.toString('latin1');
@@ -409,11 +411,22 @@ async function main() {
 
   const rawReqTimer = setInterval(() => writeRawRequest(cols, rows), 5_000);
 
+  let lastFrameRef = null;
+  let lastTermGen = -1;
+
   const renderTimer = setInterval(() => {
     if (painting || exiting) return;
     painting = true;
     try {
       const frame = readFrame();
+      // Idle skip: same game frame object AND no new claude output since the
+      // last paint → the grid cannot have changed; save the 16k-cell compose.
+      if (!forceRepaint && frame === lastFrameRef && termGen === lastTermGen && prevGrid) {
+        painting = false;
+        return;
+      }
+      lastFrameRef = frame;
+      lastTermGen = termGen;
       const bufA = term.buffer.active;
       const vy = bufA.viewportY;
       const lineCache = new Array(rows).fill(undefined);
