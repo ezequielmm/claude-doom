@@ -416,19 +416,31 @@ export async function runScreenTests(counters, { test: testFn }) {
       }
     });
 
-    await testFn('wrap shim: TTY + screen enabled → composites (alt-screen)', async () => {
-      const result = await new Promise((resolve) => {
+    await testFn('wrap shim: opt-in only — composites with screen:true, passes through otherwise', async () => {
+      const os2 = await import('node:os');
+      const fs2 = await import('node:fs');
+      const run = (cfgJson) => new Promise((resolve) => {
+        const cfgDir = fs2.mkdtempSync(path.join(os2.tmpdir(), 'afk-optin-'));
+        fs2.writeFileSync(path.join(cfgDir, 'config.json'), JSON.stringify(cfgJson));
         const outer = spawn('conhost.exe', [
           '--headless', '--width', '90', '--height', '25', '--',
           'node', '--no-warnings', path.join(ROOT, 'scripts', 'doomscreen.mjs'),
-          '--wrap', 'cmd.exe', '--',
-        ], { stdio: ['pipe', 'pipe', 'pipe'] });
+          '--wrap', 'cmd.exe', '--', '/c', 'echo OPTIN_PROBE',
+        ], {
+          stdio: ['pipe', 'pipe', 'pipe'],
+          env: { ...process.env, AFK_ARCADE_CONFIG_DIR: cfgDir },
+        });
         let out = '';
         outer.stdout.on('data', (d) => { out += d; });
-        setTimeout(() => { outer.kill(); resolve({ out }); }, 9000);
+        const t = setTimeout(() => { outer.kill(); resolve(out); }, 12_000);
+        outer.on('exit', () => { clearTimeout(t); setTimeout(() => resolve(out), 300); });
       });
-      assert(result.out.includes('\x1b[?1049h'),
-        `wrapped TTY session must enter the compositor, got ${JSON.stringify(result.out.slice(0, 120))}`);
+      const on = await run({ enabled: true, game: 'doom', screen: true });
+      assert(on.includes('\x1b[?1049h'),
+        `screen:true must composite, got ${JSON.stringify(on.slice(0, 120))}`);
+      const unset = await run({ enabled: true, game: 'doom' });
+      assert(!unset.includes('\x1b[?1049h') && unset.includes('OPTIN_PROBE'),
+        'screen unset must pass through (opt-in default)');
     });
   } else {
     process.stdout.write('SKIP  conhost --headless roundtrip — win32 only\n');

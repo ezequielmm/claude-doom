@@ -326,10 +326,12 @@ async function main() {
     if (process.env.AFK_DOOMSCREEN_INNER === '1') passthrough();
     // 2. Pipes, scripts, CI: only real interactive consoles get a backdrop.
     if (!process.stdout.isTTY || !process.stdin.isTTY) passthrough();
-    // 3. User toggle (`/afk screen off`).
+    // 3. OPT-IN toggle: the backdrop wraps plain `claude` ONLY when the
+    //    user asked for it (`/afk screen on` → screen:true). Default is a
+    //    transparent passthrough — /arcade is the explicit activation path.
     let cfg = {};
-    try { cfg = readConfig(); } catch { /* no config — default wrapped */ }
-    if (cfg.screen === false || cfg.enabled === false) passthrough();
+    try { cfg = readConfig(); } catch { /* no config — passthrough */ }
+    if (cfg.screen !== true || cfg.enabled === false) passthrough();
     // 4. Quick non-UI invocations skip the compositor entirely.
     const NONINTERACTIVE = new Set([
       '--version', '-v', '--help', '-h', '-p', '--print',
