@@ -52,7 +52,7 @@ const PID_FILE     = path.join(DOOM_TMP, 'daemon.pid');
 const SPAWN_LOCK   = path.join(DOOM_TMP, 'spawn.lock');
 
 const FPS = Math.max(5, Math.min(35,
-  parseInt(process.env.AFK_DOOMSCREEN_FPS ?? '24', 10) || 24));
+  parseInt(process.env.AFK_DOOMSCREEN_FPS ?? '30', 10) || 30));
 /** A frozen frame older than this is dropped (hides daemon recycles). */
 const FRAME_FRESH_MS = 12_000;
 /** Toggle keys: F8 (CSI 19~) and Ctrl+] (0x1d, survives chunk splits). */
@@ -414,15 +414,29 @@ async function main() {
   let lastFrameRef = null;
   let lastTermGen = -1;
 
-  const renderTimer = setInterval(() => {
-    if (painting || exiting) return;
+  // Accumulator pacing — Windows clamps setTimeout to ~15.6ms, so a plain
+  // setInterval(33) drifts to ~21fps. Late fires are repaid via
+  // setImmediate until the schedule catches up; long stalls are forgiven
+  // (clamped to one interval of debt) instead of bursting.
+  const paintIntervalMs = 1000 / FPS;
+  let nextPaintDue = Date.now() + paintIntervalMs;
+  let renderTimer = null;
+  const schedulePaint = () => {
+    if (exiting) return;
+    nextPaintDue = Math.max(nextPaintDue + paintIntervalMs, Date.now() - paintIntervalMs);
+    const delay = nextPaintDue - Date.now();
+    renderTimer = delay <= 0 ? setImmediate(paintOnce) : setTimeout(paintOnce, delay);
+  };
+  const paintOnce = () => {
+    if (exiting) return;
+    if (painting) { schedulePaint(); return; }
     painting = true;
     try {
       const frame = readFrame();
       // Idle skip: same game frame object AND no new claude output since the
       // last paint → the grid cannot have changed; save the 16k-cell compose.
+      // (return passes through finally, which reschedules the loop.)
       if (!forceRepaint && frame === lastFrameRef && termGen === lastTermGen && prevGrid) {
-        painting = false;
         return;
       }
       lastFrameRef = frame;
@@ -453,9 +467,14 @@ async function main() {
     } catch (err) {
       dbg({ event: 'render-error', message: err.message });
     } finally {
+      // Reschedule HERE so every exit path (including the idle-skip early
+      // return above) keeps the loop alive — recursive pacing has no
+      // setInterval safety net.
       painting = false;
+      schedulePaint();
     }
-  }, Math.round(1000 / FPS));
+  };
+  renderTimer = setTimeout(paintOnce, paintIntervalMs);
 
   dbg({ event: 'boot', cols, rows, fps: FPS, routedInput, cmd: cmdArgs });
 }

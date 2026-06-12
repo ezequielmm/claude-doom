@@ -50,6 +50,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Full-speed compositor pipeline** (3.7 → 32 game fps / 28.6 paint fps):
+  frame.rgb streams from the daemon tick loop at `config.screenFps`
+  (default 35 — deliberately NOT backdropFps, whose 24 silently capped
+  the stream) using the bulk `getFrameRGB` path; adaptive tick cadence
+  (~36Hz via setImmediate-chaining while the compositor is live — Windows
+  clamps setTimeout to ~15.6ms — banner pace otherwise); doomscreen
+  paints at 30fps default (cap 35) with accumulator pacing and an idle
+  skip when neither the game frame nor claude's output changed.
+  `bot-status.json` now publishes live `tickHz`/`rawHz` telemetry.
 - `scripts/daemon.mjs`: **compositor-implied bot** — a fresh
   `raw-request.json` lazily creates the bot even when `config.bot` is off,
   because both "start the game past the attract demo" AND the

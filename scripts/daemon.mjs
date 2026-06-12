@@ -267,6 +267,13 @@ async function main() {
   const BOT_STATUS_INTERVAL_MS = 1000;
   let lastBotStatusAt = 0;
 
+  // Live rate telemetry (published in bot-status.json)
+  let tickCountWindow = 0;
+  let rawCountWindow = 0;
+  let lastHzAt = Date.now();
+  let tickHz = 0;
+  let rawHz = 0;
+
   // Session state read cadence (for bot aggressive mode)
   const SESSION_STATE_INTERVAL_MS = 1000;
   let lastSessionStateAt = 0;
@@ -342,10 +349,31 @@ async function main() {
   // Clean up any stale shutdown file left from a previous run
   try { fs.unlinkSync(SHUTDOWN_FILE); } catch { /* not present — ok */ }
 
-  const tickTimer = setInterval(() => {
+  // Adaptive tick cadence: engine.tick() costs ~14ms (it renders a full
+  // game frame; internally time-driven, safe at any rate). While the
+  // compositor consumes raw frames we tick near DOOM's native 35Hz; in
+  // banner-only mode the relaxed pace keeps the daemon cheap. Recursive
+  // setTimeout so the delay can switch per cycle — clearInterval works on
+  // timeout handles, so every existing exit path stays valid.
+  // ~36Hz effective: heavy ticks (render+raw ≈ 24ms) chain via setImmediate,
+  // light ones rest on the timer. 12 was too eager — 55Hz of 14ms renders
+  // burned ~75% of a core for frames nobody streams.
+  const FAST_TICK_INTERVAL_MS = 26;
+  let tickTimer = null;
+  const tickOnce = () => {
+    const tickStartedAt = Date.now();
     try {
       engine.tick();
       tickCount++;
+      tickCountWindow++;
+      if (tickStartedAt - lastHzAt >= 1000) {
+        const win = (tickStartedAt - lastHzAt) / 1000;
+        tickHz = Math.round(tickCountWindow / win);
+        rawHz = Math.round(rawCountWindow / win);
+        tickCountWindow = 0;
+        rawCountWindow = 0;
+        lastHzAt = tickStartedAt;
+      }
 
       const now = Date.now();
 
@@ -521,6 +549,8 @@ async function main() {
               aggressive: cachedIsAggressive,
               owner: currentOwner,
               rssMb,
+              tickHz,
+              rawHz,
               updatedAt: now,
             });
           } catch { /* non-fatal */ }
@@ -699,8 +729,17 @@ async function main() {
           }
         } catch { rawReqActive = false; }
       }
-      if (rawReqActive && now - lastRawStreamAt >= streamInterval) {
-        lastRawStreamAt = now;
+      // Raw cadence: cfg.screenFps (default 35 — DOOM's native rate). NOT
+      // backdropFps: that knob throttles kitty PNG streaming over shared
+      // ttys; inheriting it silently capped the compositor at 24fps.
+      // Accumulator scheduling absorbs tick jitter (a plain `now-last >=
+      // interval` aliases against the tick grid).
+      const rawFps = typeof cfg.screenFps === 'number'
+        ? Math.min(35, Math.max(5, cfg.screenFps))
+        : 35;
+      const rawInterval = 1000 / rawFps;
+      if (rawReqActive && now - lastRawStreamAt >= rawInterval) {
+        lastRawStreamAt = Math.max(lastRawStreamAt + rawInterval, now - rawInterval);
         try {
           const vpDims = rawReqDims ?? { cols: readViewport().cols, rows: 25 };
           const rgbW = Math.max(80, Math.min(560, vpDims.cols * 2));
@@ -719,12 +758,29 @@ async function main() {
           const tmpRgb = FRAME_RGB + '.tmp';
           fs.writeFileSync(tmpRgb, out);
           fs.renameSync(tmpRgb, FRAME_RGB);
+          rawCountWindow++;
         } catch { /* non-fatal — compositor keeps last frame */ }
       }
     } catch {
-      // Engine error — stop ticking but keep process alive for pidfile cleanup
+      // Engine error — keep the loop alive for pidfile cleanup paths
     }
-  }, TICK_INTERVAL_MS);
+    // Windows clamps setTimeout to ~15.6ms, so fullspeed pacing can't come
+    // from timers alone. Hybrid: when the compositor is live and the body
+    // already consumed the budget (engine.tick alone is ~14ms), chain via
+    // setImmediate — the tick cost itself becomes the pacemaker. The timer
+    // path only fires when the body ran faster than the budget.
+    // (Every exit path clears tickTimer then process.exit()s, so a pending
+    // immediate never outlives the daemon.)
+    const elapsed = Date.now() - tickStartedAt;
+    if (rawReqActive && elapsed >= FAST_TICK_INTERVAL_MS) {
+      tickTimer = setImmediate(tickOnce);
+    } else if (rawReqActive) {
+      tickTimer = setTimeout(tickOnce, FAST_TICK_INTERVAL_MS - elapsed);
+    } else {
+      tickTimer = setTimeout(tickOnce, TICK_INTERVAL_MS);
+    }
+  };
+  tickTimer = setTimeout(tickOnce, TICK_INTERVAL_MS);
 
   // Watchdog: if viewport.json is missing or older than 10 minutes, exit
   const watchdogTimer = setInterval(() => {

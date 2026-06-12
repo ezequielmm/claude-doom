@@ -324,7 +324,19 @@ export async function runScreenTests(counters, { test: testFn }) {
         const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
         if (pid > 0) await shutdown();
       } catch { /* none running */ }
+      // A doomscreen lingering from the e2e drill above keeps rewriting
+      // raw-request every 5s and would poison the negative phase — it
+      // publishes its pid in the file; kill it, then re-delete after a
+      // grace beat in case a final write raced the first unlink.
+      try {
+        const req = JSON.parse(fs.readFileSync(rawRequest, 'utf8'));
+        if (req.pid > 0) { try { process.kill(req.pid); } catch { /* gone */ } }
+      } catch { /* absent or unreadable */ }
       for (const f of [botStatus, rawRequest, shutdownFile]) {
+        try { fs.unlinkSync(f); } catch { /* absent */ }
+      }
+      await new Promise((r) => setTimeout(r, 1200));
+      for (const f of [botStatus, rawRequest]) {
         try { fs.unlinkSync(f); } catch { /* absent */ }
       }
 
