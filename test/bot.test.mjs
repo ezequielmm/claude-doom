@@ -166,6 +166,34 @@ export async function runBotTests(counters, { test: testFn }) {
     }
   });
 
+  // ── Test 2b: NO ENTER taps during continuous gameplay ─────────────────────
+  // ENTER walks the in-game menu in this build (open → New Game → skill);
+  // a periodic ENTER cadence silently restarted the game every ~30s.
+
+  test('bot in-game: never taps ENTER during continuous gameplay', () => {
+    const eng = makeEngine(inGamePixel(320, 200));
+    const bot = createBot(eng);
+
+    let now = 0;
+    eng._setNow(now);
+    // 15 simulated seconds — well past the old 10s ENTER cadence
+    for (let i = 0; i < 600; i++) {
+      now += 25;
+      eng._setNow(now);
+      bot.update(now, false);
+    }
+
+    bot.dispose();
+
+    const enterTaps = eng._keys.filter(k => k.code === 13 && k.pressed === 1);
+    if (enterTaps.length > 0) {
+      throw new Error(
+        `ENTER must never fire while in-game (restarts the run via the menu); ` +
+        `got ${enterTaps.length} tap(s)`,
+      );
+    }
+  });
+
   // ── Test 3: Monster high ratio → FIRE burst ───────────────────────────────
 
   test('bot monster detection: FIRE burst when monster ratio high', () => {
