@@ -595,11 +595,16 @@ switch (cmd) {
         break;
       }
 
-      // 2. Write the shims (cmd for PowerShell/cmd, sh for Git Bash)
+      // 2. Write the shims: .cmd (cmd.exe), .ps1 (PowerShell resolves it
+      //    before .cmd), and extensionless sh (Git Bash)
       fs.mkdirSync(binDir, { recursive: true });
       fs.writeFileSync(path.join(binDir, 'claude.cmd'),
         '@echo off\r\n' +
         `"${process.execPath}" --no-warnings "${screenScript}" --wrap "${real}" -- %*\r\n`);
+      fs.writeFileSync(path.join(binDir, 'claude.ps1'),
+        '# afk-arcade shim\r\n' +
+        `& "${process.execPath}" --no-warnings "${screenScript}" --wrap "${real}" -- @args\r\n` +
+        'exit $LASTEXITCODE\r\n');
       fs.writeFileSync(path.join(binDir, 'claude'),
         '#!/bin/sh\n' +
         `exec "${process.execPath.replace(/\\/g, '/')}" --no-warnings ` +
@@ -622,6 +627,17 @@ switch (cmd) {
       } catch (err) {
         pathNote = `PATH update failed (${err.message.slice(0, 60)}) — add manually: ${binDir}`;
       }
+
+      // 4. Broadcast WM_SETTINGCHANGE so Explorer (and listening apps)
+      //    refresh their environment — without this, consoles launched from
+      //    the taskbar keep the pre-install PATH until logoff.
+      try {
+        const bc = [
+          `Add-Type -Namespace W -Name N -MemberDefinition '[DllImport("user32.dll",SetLastError=true,CharSet=CharSet.Auto)] public static extern IntPtr SendMessageTimeout(IntPtr h,uint m,UIntPtr w,string l,uint f,uint t,out UIntPtr r);'`,
+          `$r=[UIntPtr]::Zero;[W.N]::SendMessageTimeout([IntPtr]0xffff,0x001A,[UIntPtr]::Zero,'Environment',2,5000,[ref]$r)|Out-Null`,
+        ].join(';');
+        execFileSync('powershell.exe', ['-NoProfile', '-Command', bc]);
+      } catch { /* non-fatal — a logoff/logon also refreshes */ }
 
       writeConfig({ screen: true });
       process.stdout.write([
