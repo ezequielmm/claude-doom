@@ -50,6 +50,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added (post-0.9.0 main)
 
+- **`/afk brain on` — Claude pilots the marine**: `scripts/doombrain.mjs`
+  sidecar snapshots frame.rgb (upscaled, dim-corrected PNG), asks a cheap
+  model via `claude -p --model haiku --strict-mcp-config --allowedTools
+  Read` (prompt over STDIN — it contains `|` and `"` that cmd.exe would
+  parse as pipeline operators) for a minified-JSON play plan, and drives
+  the daemon through control.json as the `user` owner (the heuristic bot
+  yields while the brain heartbeat is fresh). Plans persist between
+  decisions: held keys refresh at 200ms, the turn component expires after
+  plan.turnMs. Auto-stop after AFK_BRAIN_MINUTES (default 30);
+  AFK_BRAIN_MODEL / AFK_BRAIN_INTERVAL tune it. `lib/brain-core.mjs`
+  (extractPlan / planHeldKeys / planTaps) is pure and unit-tested. Live
+  smoke: haiku read a frame and answered "Red demon left — centering and
+  firing".
+- **No floating banner inside the compositor**: the statusline now emits a
+  single HUD text line (suffix `doom: fullscreen`) when
+  `AFK_DOOMSCREEN_INNER` is set — banner rows used to composite as an
+  orphaned blob floating over the fullscreen game.
+
 - **`/afk screen on` — plain `claude` boots with the DOOM backdrop**: installs
   a PATH shim (`~/.claude/afk-arcade/bin/claude.cmd` + sh twin for Git Bash,
   prepended to the user PATH via the PowerShell environment API — never setx,

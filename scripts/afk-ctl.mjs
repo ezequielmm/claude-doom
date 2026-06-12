@@ -493,6 +493,68 @@ switch (cmd) {
     break;
   }
 
+  case 'brain': {
+    const brainScript = path.join(ROOT, 'scripts', 'doombrain.mjs');
+    const doomTmp = path.join(os.tmpdir(), 'afk-arcade', 'doom');
+    const statusFile = path.join(doomTmp, 'doombrain-status.json');
+    const stopFile = path.join(doomTmp, 'doombrain.stop');
+    const sub = args[1];
+
+    if (sub === 'on') {
+      // Already running?
+      try {
+        const st = readJson(statusFile, null);
+        if (st?.pid && !st.stopped && Date.now() - (st.updatedAt ?? 0) < 10_000) {
+          process.kill(st.pid, 0);
+          process.stdout.write(`doombrain already running (pid ${st.pid})\n`);
+          break;
+        }
+      } catch { /* stale */ }
+      const { spawn } = await import('node:child_process');
+      const logPath = path.join(os.homedir(), '.claude', 'afk-arcade', 'brain.log');
+      fs.mkdirSync(path.dirname(logPath), { recursive: true });
+      const logFd = fs.openSync(logPath, 'a');
+      const child = spawn(process.execPath, ['--no-warnings', brainScript], {
+        detached: true, stdio: ['ignore', logFd, logFd],
+      });
+      child.unref();
+      fs.closeSync(logFd);
+      process.stdout.write([
+        `doombrain launched (pid ${child.pid}) — Claude pilots the marine.`,
+        `  model:    ${process.env.AFK_BRAIN_MODEL ?? 'haiku'} (AFK_BRAIN_MODEL to change)`,
+        `  cadence:  every ${process.env.AFK_BRAIN_INTERVAL ?? 4000}ms, auto-stop ${process.env.AFK_BRAIN_MINUTES ?? 30}min`,
+        `  log:      ${logPath}`,
+        'The heuristic bot yields while the brain heartbeat is fresh.',
+        'Stop with: /afk brain off',
+        '',
+      ].join('\n'));
+      break;
+    }
+
+    if (sub === 'off') {
+      try { fs.writeFileSync(stopFile, 'afk-ctl'); } catch { /* ignore */ }
+      try {
+        const st = readJson(statusFile, null);
+        if (st?.pid) setTimeout(() => { try { process.kill(st.pid); } catch { /* gone */ } }, 6000).unref();
+      } catch { /* ignore */ }
+      process.stdout.write('doombrain stopping (stop sentinel written; pid killed in 6s if needed).\n');
+      break;
+    }
+
+    // status / no subcommand
+    const st = readJson(statusFile, null);
+    if (!st) {
+      process.stdout.write('doombrain: not running. Start with /afk brain on\n');
+    } else {
+      const age = ((Date.now() - (st.updatedAt ?? 0)) / 1000) | 0;
+      process.stdout.write(
+        `doombrain: ${st.stopped ? 'STOPPED' : 'running'} pid=${st.pid} model=${st.model} ` +
+        `decisions=${st.decisions} failures=${st.failures} note="${st.note ?? ''}" (${age}s ago)\n`,
+      );
+    }
+    break;
+  }
+
   case 'screen': {
     const screenScript = path.join(ROOT, 'scripts', 'doomscreen.mjs');
     const screenCmd = `${process.execPath} --no-warnings ${screenScript}`;
@@ -624,8 +686,10 @@ switch (cmd) {
       '  debug tail [n]       — print last n lines from debug.log (default: 30)',
       '  fetch-doom           — download DOOM WASM assets into vendor/doom/',
       '  play                 — print the command to play DOOM in a fresh terminal',
-      '  screen               — universal backdrop: DOOM behind Claude in ANY terminal',
-      '                         (text-cell compositor; F8 toggles keyboard on Windows)',
+      '  screen [on|off]      — universal backdrop: DOOM behind Claude in ANY terminal',
+      '                         (on = plain `claude` boots with it; F8 toggles keyboard)',
+      '  brain [on|off|status]— Claude pilots the marine: a cheap model (haiku) reads',
+      '                         frames and plays via control.json; bot yields meanwhile',
       '  setup [--yes] [--no-iterm]',
       '                       — one-shot installer: wires statusline, downloads DOOM assets,',
       '                         offers iTerm2 on macOS (--yes to accept all, --no-iterm to skip)',

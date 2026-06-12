@@ -216,6 +216,48 @@ export async function runScreenTests(counters, { test: testFn }) {
     assert(!after.startsWith('日'), 'no duplicate wide glyph');
   });
 
+  // ── Brain core (pure) ───────────────────────────────────────────────────────
+
+  await testFn('brain: extractPlan digs JSON out of prose/fences and normalizes', async () => {
+    const { extractPlan } = await import('../lib/brain-core.mjs');
+    const p1 = extractPlan('Sure! ```json\n{"move":"forward","turn":"left","turnMs":500,"fire":true,"use":false,"note":"monster ahead"}\n```');
+    assert(p1 !== null && p1.move === 'forward' && p1.turn === 'left' && p1.turnMs === 500 && p1.fire === true,
+      `plan must parse, got ${JSON.stringify(p1)}`);
+    const p2 = extractPlan('{"move":"weird","turn":"right"}');
+    assert(p2.move === 'forward' && p2.turn === 'right' && p2.turnMs === 300,
+      `invalid move falls back to forward, default turnMs 300; got ${JSON.stringify(p2)}`);
+    assert(extractPlan('no json here') === null, 'prose without JSON → null');
+    assert(extractPlan('{broken') === null, 'broken JSON → null');
+  });
+
+  await testFn('brain: planHeldKeys expires the turn, keeps movement and fire', async () => {
+    const { extractPlan, planHeldKeys } = await import('../lib/brain-core.mjs');
+    const plan = extractPlan('{"move":"forward","turn":"right","turnMs":400,"fire":true}');
+    const early = planHeldKeys(plan, 100);
+    assert(early.includes(0xad) && early.includes(0xae) && early.includes(0xa3),
+      `early: forward+right+fire, got ${JSON.stringify(early)}`);
+    const late = planHeldKeys(plan, 900);
+    assert(late.includes(0xad) && !late.includes(0xae) && late.includes(0xa3),
+      `after turnMs: turn released, rest held; got ${JSON.stringify(late)}`);
+  });
+
+  // ── Statusline inside the compositor: HUD only, no floating banner ─────────
+
+  await testFn('statusline: AFK_DOOMSCREEN_INNER emits a single HUD line (no banner rows)', async () => {
+    const { spawnSync } = await import('node:child_process');
+    const r = spawnSync(process.execPath,
+      ['--no-warnings', path.join(ROOT, 'scripts', 'statusline.mjs')], {
+        input: '{"model":{"display_name":"T"},"session_id":"s"}',
+        encoding: 'utf8',
+        timeout: 30_000,
+        env: { ...process.env, AFK_DOOMSCREEN_INNER: '1', COLUMNS: '80', LINES: '30' },
+      });
+    const lines = (r.stdout ?? '').split('\n').filter((l) => l.length > 0);
+    assert(lines.length === 1, `exactly one HUD line, got ${lines.length}`);
+    assert(!r.stdout.includes('▀') && !r.stdout.includes('▄') && !r.stdout.includes('▌'),
+      'no block glyphs — the banner must not float over the fullscreen game');
+  });
+
   // ── conhost --headless roundtrip (win32 only) ──────────────────────────────
 
   if (process.platform === 'win32') {

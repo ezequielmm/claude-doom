@@ -312,6 +312,31 @@ async function main() {
     process.exit(0);
   }
 
+  // Inside the doomscreen compositor the game IS the whole screen — banner
+  // rows would float over it as an orphaned blob (their centered game cells
+  // win the composition). Emit the HUD text line only.
+  if (process.env.AFK_DOOMSCREEN_INNER === '1') {
+    const cols0 = parseInt(process.env.COLUMNS, 10) || 80;
+    const botStatusPath = path.join(TMP_ROOT, 'doom', 'bot-status.json');
+    const bs = (() => {
+      try {
+        const b = readJson(botStatusPath, null);
+        return b && Date.now() - (b.updatedAt ?? 0) < 5000 ? b : null;
+      } catch { return null; }
+    })();
+    const hudOnly = buildHudLine({
+      state, modelObj: json.model, ctxObj: json.context_window,
+      width: clamp(cols0, 20, 280), extraSuffix: 'doom: fullscreen', botStatus: bs,
+    }) + '\n';
+    process.stdout.write(hudOnly);
+    if (dbgOn) {
+      diag.tMs = Date.now() - t0;
+      diag.out = { kind: 'doomscreen-hud', lines: 1, bytes: hudOnly.length, sample: null };
+      dbgLog('statusline', diag);
+    }
+    process.exit(0);
+  }
+
   // 4. Terminal dimensions
   const cols = parseInt(process.env.COLUMNS, 10) || 80;
   const width = clamp(cols, 20, 280);
