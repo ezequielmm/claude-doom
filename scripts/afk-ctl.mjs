@@ -642,7 +642,16 @@ switch (cmd) {
           '}',
           MARK_E,
         ].join('\r\n');
-        const docs = path.join(os.homedir(), 'Documents');
+        // NEVER assume ~\Documents: OneDrive redirection moves it (and
+        // localizes the name — this machine: OneDrive\Documentos). Ask
+        // Windows for the real folder.
+        let docs;
+        try {
+          docs = execFileSync('powershell.exe',
+            ['-NoProfile', '-Command', "[Environment]::GetFolderPath('MyDocuments')"],
+            { encoding: 'utf8' }).trim();
+        } catch { docs = ''; }
+        if (!docs) docs = path.join(os.homedir(), 'Documents');
         for (const dir of [path.join(docs, 'WindowsPowerShell'), path.join(docs, 'PowerShell')]) {
           fs.mkdirSync(dir, { recursive: true });
           const prof = path.join(dir, 'profile.ps1');
