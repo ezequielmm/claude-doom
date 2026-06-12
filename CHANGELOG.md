@@ -50,6 +50,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added (post-0.9.0 main)
 
+- **Cerebellum + cortex architecture (brain v2)**: the heuristic bot never
+  stops playing (30Hz reflexes); the brain became a strategist. Bot
+  upgrades: 3-zone MOTION detection — firing now requires movement
+  evidence (static red walls/lava no longer eat the pistol), side-zone
+  motion triggers a short aim turn. Cortex orders (`hunt / advance /
+  explore_left / explore_right / retreat / door`) bias wander direction,
+  cadence, backward movement and USE spam; the daemon feeds fresh
+  `brain-orders.json` into `bot.update()`. doombrain v2 renders frames as
+  a 40×12 ASCII tactical grid with motion marks (text-only prompts, ~10x
+  cheaper than vision; `AFK_BRAIN_VISION=png` keeps the old mode) and
+  carries a 6-note rolling memory between decisions. Live smoke: haiku
+  read the grid and answered "hunt: 2-3 enemies lower area. Clear
+  approach. Advance to engage."
 - **`/afk brain on` — Claude pilots the marine**: `scripts/doombrain.mjs`
   sidecar snapshots frame.rgb (upscaled, dim-corrected PNG), asks a cheap
   model via `claude -p --model haiku --strict-mcp-config --allowedTools

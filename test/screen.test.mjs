@@ -241,6 +241,42 @@ export async function runScreenTests(counters, { test: testFn }) {
       `after turnMs: turn released, rest held; got ${JSON.stringify(late)}`);
   });
 
+  await testFn('cortex: extractOrder normalizes goals and clamps duration', async () => {
+    const { extractOrder } = await import('../lib/brain-core.mjs');
+    const o1 = extractOrder('plan: {"goal":"explore_left","durationMs":9000,"note":"dark opening west"}');
+    assert(o1 !== null && o1.goal === 'explore_left' && o1.durationMs === 9000,
+      `order must parse, got ${JSON.stringify(o1)}`);
+    const o2 = extractOrder('{"goal":"dance","durationMs":999999}');
+    assert(o2.goal === 'advance' && o2.durationMs === 25_000,
+      `unknown goal → advance, duration clamped; got ${JSON.stringify(o2)}`);
+    assert(extractOrder('nope') === null, 'no JSON → null');
+  });
+
+  await testFn('cortex: frameToAsciiGrid marks red, bright, dark and MOTION', async () => {
+    const { frameToAsciiGrid } = await import('../lib/brain-core.mjs');
+    const { parseFrameRgb: parse } = await import('../lib/compose.mjs');
+    const mk = (paint) => {
+      const w = 80, h = 24;
+      const buf = Buffer.alloc(4 + w * h * 3);
+      buf.writeUInt16LE(w, 0); buf.writeUInt16LE(h, 2);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const [r, g, b] = paint(x, y);
+        const o = 4 + (y * w + x) * 3;
+        buf[o] = r; buf[o + 1] = g; buf[o + 2] = b;
+      }
+      return parse(buf);
+    };
+    const a = mk((x) => x < 20 ? [200, 30, 10] : x < 40 ? [150, 150, 150] : [20, 20, 20]);
+    const grid1 = frameToAsciiGrid(a, null, 20, 6);
+    assert(grid1.includes('%'), 'red zone marked %');
+    assert(grid1.includes('#'), 'bright zone marked #');
+    assert(grid1.includes(' '), 'dark zone marked space');
+    // Same scene with a moved bright block → motion glyphs
+    const b = mk((x) => x < 20 ? [200, 30, 10] : x < 40 ? [20, 20, 20] : x < 60 ? [150, 150, 150] : [20, 20, 20]);
+    const grid2 = frameToAsciiGrid(b, a, 20, 6);
+    assert(grid2.includes('!'), `moved block must be marked !, got:\n${grid2}`);
+  });
+
   // ── Statusline inside the compositor: HUD only, no floating banner ─────────
 
   await testFn('statusline: AFK_DOOMSCREEN_INNER emits a single HUD line (no banner rows)', async () => {

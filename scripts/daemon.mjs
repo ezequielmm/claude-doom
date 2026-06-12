@@ -45,6 +45,8 @@ const BACKDROP_PNG = path.join(DOOM_TMP, 'backdrop.png');
 const BOT_STATUS   = path.join(DOOM_TMP, 'bot-status.json');
 // Written by scripts/control.mjs; daemon reads to detect user ownership.
 const CONTROL_JSON = path.join(DOOM_TMP, 'control.json');
+// Written by scripts/doombrain.mjs (cortex): strategic orders for the bot.
+const BRAIN_ORDERS = path.join(DOOM_TMP, 'brain-orders.json');
 // On Windows, SIGTERM via process.kill() calls TerminateProcess (no handler fires).
 // Writing this file is the portable shutdown signal — daemon polls and exits cleanly.
 const SHUTDOWN_FILE = path.join(DOOM_TMP, 'daemon.shutdown');
@@ -266,6 +268,10 @@ async function main() {
   // Bot status write cadence
   const BOT_STATUS_INTERVAL_MS = 1000;
   let lastBotStatusAt = 0;
+
+  // Cortex order cache (brain-orders.json, re-read at 1s cadence)
+  let lastOrderReadAt = 0;
+  let cachedOrder = null;
 
   // Live rate telemetry (published in bot-status.json)
   let tickCountWindow = 0;
@@ -519,8 +525,19 @@ async function main() {
             }
           }
 
+          // Cortex order: fresh brain-orders.json biases the bot's strategy
+          if (now - lastOrderReadAt >= 1000) {
+            lastOrderReadAt = now;
+            try {
+              const stat = fs.statSync(BRAIN_ORDERS);
+              const order = readJson(BRAIN_ORDERS, null);
+              const ttl = typeof order?.durationMs === 'number' ? order.durationMs : 12_000;
+              cachedOrder = (order && now - stat.mtimeMs <= ttl + 5000) ? order : null;
+            } catch { cachedOrder = null; }
+          }
+
           try {
-            bot.update(now, cachedIsAggressive);
+            bot.update(now, cachedIsAggressive, cachedOrder);
           } catch { /* bot error — keep ticking */ }
         }
 

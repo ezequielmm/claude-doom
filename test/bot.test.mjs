@@ -194,16 +194,22 @@ export async function runBotTests(counters, { test: testFn }) {
     }
   });
 
-  // ── Test 3: Monster high ratio → FIRE burst ───────────────────────────────
+  // ── Test 3: MOVING monster → FIRE burst ───────────────────────────────────
+  // Targeting is motion-first: the sprite must move between decisions.
 
-  test('bot monster detection: FIRE burst when monster ratio high', () => {
-    const eng = makeEngine(monsterPixel(320, 200));
+  test('bot monster detection: FIRE burst when fleshy pixels MOVE', () => {
+    const base = monsterPixel(320, 200);
+    let phase = 0;
+    // % 5 with one increment per 25ms update: decisions land every 6 updates,
+    // and gcd(5,6)=1 keeps the sprite offset DIFFERENT at every decision —
+    // % 3 aliased with the cadence and froze the sprite in the bot's eyes.
+    const eng = makeEngine((x, y) => base(x - (phase % 5) * 8, y));
     const bot = createBot(eng);
 
     let now = 0;
-    // First tick establishes "in-game" state; advance past decision interval
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 80; i++) {
       now += 25;
+      phase++;            // sprite wiggles → motion zones light up
       eng._setNow(now);
       bot.update(now, false);
     }
@@ -213,9 +219,70 @@ export async function runBotTests(counters, { test: testFn }) {
     const fireBursts = eng._keys.filter(k => k.code === 0xa3 && k.pressed === 1);
     if (fireBursts.length === 0) {
       throw new Error(
-        `Expected KEY_FIRE (0xa3) burst when monster pixels high. ` +
+        `Expected KEY_FIRE (0xa3) burst for a MOVING monster. ` +
         `Keys: ${JSON.stringify(eng._keys.map(k => ({ c: '0x' + k.code.toString(16), p: k.pressed })))}`,
       );
+    }
+  });
+
+  // ── Test 3b: STATIC fleshy frame (red wall / lava) → never fires ──────────
+  // The original heuristic emptied the pistol into red walls; motion gating
+  // is the cure and this is its regression test.
+
+  test('bot motion gate: static red scene → NO fire', () => {
+    const eng = makeEngine(monsterPixel(320, 200)); // fleshy but FROZEN
+    const bot = createBot(eng);
+
+    let now = 0;
+    for (let i = 0; i < 120; i++) {
+      now += 25;
+      eng._setNow(now);
+      bot.update(now, false);
+    }
+
+    bot.dispose();
+
+    const fireDowns = eng._keys.filter(k => k.code === 0xa3 && k.pressed === 1);
+    if (fireDowns.length > 0) {
+      throw new Error(
+        `Static fleshy pixels must NOT trigger fire (wall-shooting bug); ` +
+        `got ${fireDowns.length} fire press(es)`,
+      );
+    }
+  });
+
+  // ── Test 3c: cortex orders bias the cerebellum ─────────────────────────────
+
+  test('bot orders: explore_left biases turns left; retreat walks backward', () => {
+    // explore_left: more left-turn downs than right-turn downs
+    const eng1 = makeEngine(inGamePixel(320, 200));
+    const bot1 = createBot(eng1);
+    let now = 0;
+    for (let i = 0; i < 320; i++) {
+      now += 25;
+      eng1._setNow(now);
+      bot1.update(now, false, { goal: 'explore_left', durationMs: 20_000 });
+    }
+    bot1.dispose();
+    const lefts = eng1._keys.filter(k => k.code === 0xac && k.pressed === 1).length;
+    const rights = eng1._keys.filter(k => k.code === 0xae && k.pressed === 1).length;
+    if (lefts === 0 || lefts <= rights) {
+      throw new Error(`explore_left must bias left turns: L=${lefts} R=${rights}`);
+    }
+
+    // retreat: DOWNARROW held
+    const eng2 = makeEngine(inGamePixel(320, 200));
+    const bot2 = createBot(eng2);
+    now = 0;
+    for (let i = 0; i < 40; i++) {
+      now += 25;
+      eng2._setNow(now);
+      bot2.update(now, false, { goal: 'retreat', durationMs: 20_000 });
+    }
+    bot2.dispose();
+    const backDowns = eng2._keys.filter(k => k.code === 0xaf && k.pressed === 1);
+    if (backDowns.length === 0) {
+      throw new Error('retreat order must hold KEY_DOWNARROW (0xaf)');
     }
   });
 
@@ -284,8 +351,14 @@ export async function runBotTests(counters, { test: testFn }) {
     // stepX = max(1, floor(48/16))=3, stepY = max(1, floor(32/8))=4
     // We need ~6% of sampled pixels to be fleshy.
     // Make a small band fleshy (about 6% of the grid).
+    // Motion gating: ratio only counts with corroborating scene motion.
+    // A gray blob wiggles in the LEFT zone (x<90 — outside the monster
+    // sample region) so the corroboration sum rises without heating the
+    // center zone past the direct-fire threshold.
+    let wig = 0;
     const fleshyPixel = (x, y) => {
       if (y >= hudStart) return [85, 85, 83];
+      if (x < 90 && Math.abs(y - (90 + (wig % 5) * 3)) < 8) return [140, 140, 140];
       // Fleshy zone: narrow horizontal strip in center
       if (Math.abs(y - cy) < 3 && Math.abs(x - cx) < 10) return [180, 80, 50];
       return [30, 60, 20];
@@ -297,6 +370,7 @@ export async function runBotTests(counters, { test: testFn }) {
     let now = 0;
     for (let i = 0; i < 60; i++) {
       now += 25;
+      wig++;
       engCalm._setNow(now);
       botCalm.update(now, false); // calm
     }
@@ -309,6 +383,7 @@ export async function runBotTests(counters, { test: testFn }) {
     now = 0;
     for (let i = 0; i < 60; i++) {
       now += 25;
+      wig++;
       engAgg._setNow(now);
       botAgg.update(now, true); // aggressive
     }
