@@ -426,7 +426,16 @@ async function main() {
       // out-of-band at backdropFps (default 24fps).  The statusline only
       // needs to UPSERT the registry entry; no image transmission here.
       // The visible banner collapses to the single HUD line.
-      if (config.backdrop === true && !process.env.AFK_ARCADE_NO_PIXEL && hasTerminalEnv) {
+      //
+      // PER-TERMINAL AUTO-DEGRADE: backdrop requires kitty graphics. In
+      // terminals that don't speak it (e.g. Apple Terminal) the images are
+      // silently ignored — collapsing the banner there left users with a bare
+      // HUD line and "nothing playing". Sessions in non-kitty terminals skip
+      // the backdrop entirely and render the full quad banner instead.
+      const kittyCapableTerm = /warpterminal|kitty|wezterm|ghostty/i.test(
+        `${process.env.TERM_PROGRAM ?? ''} ${process.env.TERM ?? ''}`,
+      );
+      if (config.backdrop === true && !process.env.AFK_ARCADE_NO_PIXEL && hasTerminalEnv && kittyCapableTerm) {
         diag.backdrop = { registry: null };
 
         // Discover this session's tty (use per-session cache file for discovery cache)
