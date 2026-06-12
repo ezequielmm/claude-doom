@@ -50,6 +50,7 @@ process.on('exit', () => {
 // Safe because the snapshot above restores the user's real values on exit.
 spawnSync(process.execPath, [CTL, 'game', 'fire'], { encoding: 'utf8' });
 spawnSync(process.execPath, [CTL, 'rows', '5'], { encoding: 'utf8' });
+spawnSync(process.execPath, [CTL, 'banner', 'on'], { encoding: 'utf8' });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
