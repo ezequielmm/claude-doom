@@ -537,32 +537,44 @@ switch (cmd) {
       break;
     }
 
-    // Direct mode (no --wrap): explicit launch always composites
-    const inner =
-      `"${process.execPath}" --no-warnings "${screenScript}" -- "${realClaude}" --continue`;
+    // Direct mode (no --wrap): explicit launch always composites.
+    // ARGUMENT ARRAYS ONLY — composing a command string and feeding it
+    // through cmd /c double-parses quotes (a cwd ending in \ escaped its
+    // own closing quote: error 0x8007010b "Could not access starting
+    // directory"). node quotes array args correctly on its own.
+    const cwd = process.cwd().replace(/[\\/]+$/, '');
+    const innerArgs = [
+      process.execPath, '--no-warnings', screenScript, '--', realClaude, '--continue',
+    ];
 
-    // Prefer Windows Terminal when installed; classic console otherwise
     let hasWt = false;
     try { execFileSync('where.exe', ['wt.exe'], { stdio: 'ignore' }); hasWt = true; } catch { /* no wt */ }
-    const launch = hasWt
-      ? `wt -d "${process.cwd()}" cmd /c ${inner}`
-      : `start "DOOM Arcade" /D "${process.cwd()}" conhost.exe cmd /c ${inner}`;
 
     if (dry) {
-      process.stdout.write(launch + '\n');
+      const show = hasWt
+        ? ['wt', '-d', cwd, 'cmd', '/c', ...innerArgs]
+        : ['conhost.exe', 'cmd', '/c', ...innerArgs];
+      process.stdout.write(show.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ') + '\n');
       break;
     }
+
     try {
-      const child = spawnSync('cmd.exe', ['/c', launch], { timeout: 15_000 });
-      void child;
+      const { spawn } = await import('node:child_process');
+      const child = hasWt
+        ? spawn('wt.exe', ['-d', cwd, 'cmd', '/c', ...innerArgs],
+          { detached: true, stdio: 'ignore' })
+        : spawn('conhost.exe', ['cmd', '/c', ...innerArgs],
+          { detached: true, stdio: 'ignore', cwd });
+      child.unref();
       process.stdout.write([
         'Ventana DOOM Arcade lanzada — tu conversación continúa allí (claude --continue)',
         'con el juego fullscreen de fondo. F8 o Ctrl+] toggle teclado ↔ marine.',
         'Podés cerrar esta sesión cuando quieras.',
+        '(Same-window sin ventana nueva: /afk backdrop on — solo Warp/kitty.)',
         '',
       ].join('\n'));
     } catch (err) {
-      process.stdout.write(`No pude lanzar la ventana: ${err.message}\nComando manual:\n  ${inner}\n`);
+      process.stdout.write(`No pude lanzar la ventana: ${err.message}\n`);
     }
     break;
   }
