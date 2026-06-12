@@ -570,7 +570,11 @@ switch (cmd) {
         'Ventana DOOM Arcade lanzada — tu conversación continúa allí (claude --continue)',
         'con el juego fullscreen de fondo. F8 o Ctrl+] toggle teclado ↔ marine.',
         'Podés cerrar esta sesión cuando quieras.',
-        '(Same-window sin ventana nueva: /afk backdrop on — solo Warp/kitty.)',
+        '',
+        'SAME-WINDOW (sin ventana nueva):',
+        '  /afk screen on   → desde el PRÓXIMO `claude`, la misma ventana donde lo',
+        '                     tipeás arranca compositada (el plugin "precargado").',
+        '  /afk backdrop on → detrás de la sesión ACTUAL, solo Warp/kitty.',
         '',
       ].join('\n'));
     } catch (err) {
@@ -769,7 +773,8 @@ switch (cmd) {
 
       writeConfig({ screen: true });
       process.stdout.write([
-        'doomscreen shim installed — plain `claude` now boots with the DOOM backdrop.',
+        'doomscreen shim ON — from your NEXT `claude`, the SAME window you type it',
+        'in boots composited (DOOM behind Claude, F8 toggles the keyboard).',
         `  shim:     ${path.join(binDir, 'claude.cmd')}`,
         `  real:     ${real}`,
         `  PATH:     ${pathNote}`,
