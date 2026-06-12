@@ -58,6 +58,8 @@ const FRAME_FRESH_MS = 12_000;
 /** Toggle keys: F8 (CSI 19~) and Ctrl+] (0x1d, survives chunk splits). */
 const F8_SEQ = Buffer.from('\x1b[19~');
 const CTRL_RBRACKET = 0x1d;
+/** F9: hide/show the game layer live (claude keeps running untouched). */
+const F9_SEQ = Buffer.from('\x1b[20~');
 
 // ── Debug telemetry (optional) ────────────────────────────────────────────────
 
@@ -414,6 +416,14 @@ async function main() {
     process.stdin.setRawMode(true);
     process.stdin.resume();
     process.stdin.on('data', (buf) => {
+      // Debug: shape only — never the full keystroke bytes (debug.log is no
+      // place for a keylogger). 4 bytes is enough to identify ESC sequences.
+      dbg({ event: 'stdin', len: buf.length, head: buf.toString('hex').slice(0, 8) });
+      // F9: game layer on/off (never forwarded)
+      if (buf.includes(F9_SEQ)) {
+        setGameVisible(!gameVisible);
+        return;
+      }
       // Toggle detection: F8 (CSI 19~, within-chunk) or Ctrl+] (single byte)
       let toggle = false;
       if (buf.includes(CTRL_RBRACKET) || buf.includes(F8_SEQ)) toggle = true;
@@ -421,8 +431,12 @@ async function main() {
       if (toggle) {
         mode = mode === 'claude' ? 'game' : 'claude';
         dbg({ event: 'toggle', mode });
-        if (mode === 'game') controls.start();
-        else controls.stop();
+        if (mode === 'game') {
+          if (!gameVisible) setGameVisible(true); // no driving a hidden game
+          controls.start();
+        } else {
+          controls.stop();
+        }
         forceRepaint = true;
         return; // toggle chunks are never forwarded
       }
@@ -446,13 +460,44 @@ async function main() {
     dbg({ event: 'resize', cols, rows });
   });
 
+  // ── Game-layer visibility (live off-switch, claude keeps running) ──────────
+  // F9 toggles instantly; in shim mode `/afk screen off` from INSIDE claude
+  // is honoured within ~2s via config polling. Hidden = compose with a null
+  // frame (clean dark background) and let the daemon relax to banner pace.
+  let gameVisible = true;
+  const setGameVisible = (v) => {
+    if (gameVisible === v) return;
+    gameVisible = v;
+    if (!v && mode === 'game') { mode = 'claude'; controls.stop(); }
+    forceRepaint = true;
+    dbg({ event: 'game-layer', visible: v });
+  };
+  // EDGE-triggered config follow: only a CHANGE in config.screen overrides
+  // the current state — level-triggered polling re-asserted screen:true
+  // every 2s and silently undid the manual F9 hide.
+  if (wrapTarget) {
+    let lastCfgScreen = null;
+    setInterval(() => {
+      try {
+        const v = readConfig().screen === true;
+        if (lastCfgScreen === null) { lastCfgScreen = v; return; }
+        if (v !== lastCfgScreen) {
+          lastCfgScreen = v;
+          setGameVisible(v);
+        }
+      } catch { /* keep current state */ }
+    }, 2000);
+  }
+
   // ── Compositor loop ─────────────────────────────────────────────────────────
   const readFrame = makeFrameReader();
   let prevGrid = null;
   let forceRepaint = false;
   let painting = false;
 
-  const rawReqTimer = setInterval(() => writeRawRequest(cols, rows), 5_000);
+  const rawReqTimer = setInterval(() => {
+    if (gameVisible) writeRawRequest(cols, rows);
+  }, 5_000);
 
   let lastFrameRef = null;
   let lastTermGen = -1;
@@ -475,7 +520,7 @@ async function main() {
     if (painting) { schedulePaint(); return; }
     painting = true;
     try {
-      const frame = readFrame();
+      const frame = gameVisible ? readFrame() : null;
       // Idle skip: same game frame object AND no new claude output since the
       // last paint → the grid cannot have changed; save the 16k-cell compose.
       // (return passes through finally, which reschedules the loop.)
