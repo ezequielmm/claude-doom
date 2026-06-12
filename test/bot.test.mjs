@@ -351,15 +351,22 @@ export async function runBotTests(counters, { test: testFn }) {
     // stepX = max(1, floor(48/16))=3, stepY = max(1, floor(32/8))=4
     // We need ~6% of sampled pixels to be fleshy.
     // Make a small band fleshy (about 6% of the grid).
-    // Motion gating: ratio only counts with corroborating scene motion.
-    // A gray blob wiggles in the LEFT zone (x<90 — outside the monster
-    // sample region) so the corroboration sum rises without heating the
-    // center zone past the direct-fire threshold.
-    let wig = 0;
+    // Motion gating: ratio only counts with LOCALIZED center-zone motion
+    // (centerExcess > MOTION_CORROBORATE=4, but below direct-fire 9).
+    // Deterministic: 4 known center-zone sample points (sampleZones math:
+    // rows 60+10k, center cols 106+13k for a 320x200 engine) toggle ±60
+    // luminance keyed on the DECISION clock (floor(now/150)%2) — counter
+    // based wiggles alias against the 6-update decision stride.
+    // mean Δ = 4×60/48 = 5.0 → corroborates (>4) without direct fire (<9).
+    const nowRef = { v: 0 };
+    const togglers = new Set(['119,60', '132,70', '145,80', '184,90']);
     const fleshyPixel = (x, y) => {
       if (y >= hudStart) return [85, 85, 83];
-      if (x < 90 && Math.abs(y - (90 + (wig % 5) * 3)) < 8) return [140, 140, 140];
-      // Fleshy zone: narrow horizontal strip in center
+      if (togglers.has(`${x},${y}`)) {
+        const lum = Math.floor(nowRef.v / 150) % 2 === 0 ? 40 : 100;
+        return [lum, lum, lum];
+      }
+      // Fleshy zone: narrow horizontal strip in center (~6% monster ratio)
       if (Math.abs(y - cy) < 3 && Math.abs(x - cx) < 10) return [180, 80, 50];
       return [30, 60, 20];
     };
@@ -370,7 +377,7 @@ export async function runBotTests(counters, { test: testFn }) {
     let now = 0;
     for (let i = 0; i < 60; i++) {
       now += 25;
-      wig++;
+      nowRef.v = now;
       engCalm._setNow(now);
       botCalm.update(now, false); // calm
     }
@@ -383,7 +390,7 @@ export async function runBotTests(counters, { test: testFn }) {
     now = 0;
     for (let i = 0; i < 60; i++) {
       now += 25;
-      wig++;
+      nowRef.v = now;
       engAgg._setNow(now);
       botAgg.update(now, true); // aggressive
     }
