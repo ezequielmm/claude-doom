@@ -91,9 +91,27 @@ switch (cmd) {
 
   case 'game': {
     const game = args[1];
-    if (!['fire', 'doom'].includes(game)) {
-      process.stdout.write(`afk-arcade: unknown game "${game ?? ''}". Valid options: fire, doom\n`);
+    if (!['fire', 'doom', 'gba'].includes(game)) {
+      process.stdout.write(`afk-arcade: unknown game "${game ?? ''}". Valid options: fire, doom, gba\n`);
       process.exit(1);
+    }
+    if (game === 'gba') {
+      const cfgNow = readConfig();
+      if (typeof cfgNow.gbaRom !== 'string' || !fs.existsSync(cfgNow.gbaRom)) {
+        process.stdout.write(
+          'afk-arcade: no ROM configured. Point the plugin at YOUR legally-dumped\n' +
+          'GBA file first:  /afk rom <absolute-path-to-your.gba>\n' +
+          '(Game ROMs are never downloaded or bundled.)\n',
+        );
+        process.exit(1);
+      }
+      const vendorOk = fs.existsSync(path.join(ROOT, 'vendor', 'gba', 'gbajs', 'js', 'gba.js'));
+      if (!vendorOk) {
+        process.stdout.write('Fetching the GBA emulator (one-time)…\n');
+        const r = spawnSync(process.execPath,
+          ['--no-warnings', path.join(ROOT, 'scripts', 'fetch-gba.mjs')], { stdio: 'inherit' });
+        if (r.status !== 0) process.exit(1);
+      }
     }
     if (game === 'doom') {
       // Verify vendor assets exist before switching
@@ -111,6 +129,10 @@ switch (cmd) {
       }
     }
     writeConfig({ game });
+    // The engine is chosen at daemon boot — recycle so the switch is live
+    try {
+      fs.writeFileSync(path.join(os.tmpdir(), 'afk-arcade', 'doom', 'daemon.shutdown'), 'game-switch');
+    } catch { /* daemon not running */ }
     printConfig({ ...cfg, game });
     break;
   }
@@ -493,6 +515,33 @@ switch (cmd) {
     break;
   }
 
+  case 'rom': {
+    const romPath = args[1];
+    if (!romPath) {
+      const cur = readConfig().gbaRom;
+      process.stdout.write(cur
+        ? `Current ROM: ${cur}\n`
+        : 'No ROM configured. Usage: rom <absolute-path-to-your.gba>\n');
+      break;
+    }
+    const abs = path.resolve(romPath);
+    if (!fs.existsSync(abs)) {
+      process.stdout.write(`afk-arcade: file not found: ${abs}\n`);
+      process.exit(1);
+    }
+    const size = fs.statSync(abs).size;
+    if (size < 1_000_000 || size > 64 * 1024 * 1024) {
+      process.stdout.write(`afk-arcade: ${abs} doesn't look like a GBA ROM (size ${size}B)\n`);
+      process.exit(1);
+    }
+    writeConfig({ gbaRom: abs });
+    process.stdout.write(
+      `ROM set: ${abs}\n` +
+      'Switch with: /afk game gba   (battery saves persist to ~/.claude/afk-arcade/saves/)\n',
+    );
+    break;
+  }
+
   case 'banner': {
     const v = args[1];
     if (v !== 'on' && v !== 'off') {
@@ -819,6 +868,8 @@ switch (cmd) {
       '  on / off             — enable or disable the banner',
       '  game fire            — switch to DOOM fire effect',
       '  game doom            — switch to DOOM WASM daemon frame',
+      '  game gba             — Game Boy Advance (bring your own ROM via `rom`)',
+      '  rom <path>           — point the GBA mode at YOUR legally-dumped .gba file',
       '  rows <N>             — set banner height (2..40 rows)',
       '  aspect <4:3|16:10|stretch> — set DOOM frame aspect ratio (default: 4:3)',
       '  backdrop <on|off>    — game as the WHOLE terminal background (kitty z=-2),',

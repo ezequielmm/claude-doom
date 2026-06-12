@@ -20,6 +20,9 @@ jobs:
       - name: Fetch DOOM assets (tolerate network failure)
         run: node scripts/fetch-doom.mjs || true
 
+      - name: Fetch GBA emulator + homebrew test demos (tolerate network failure)
+        run: node scripts/fetch-gba.mjs || true
+
       - name: Run core test suite
         run: node test/run.mjs
 

@@ -82,6 +82,22 @@ doors, and un-sticks itself.
 /doom             # Claude plays one frame at a time with vision, narrating
 ```
 
+### Not just DOOM — Game Boy Advance mode
+
+The whole pipeline is game-agnostic. Bring your own legally-dumped GBA ROM
+(Pokémon, anything) and it plays behind Claude instead:
+
+```
+/afk rom D:\roms\your-game.gba    # YOUR file — ROMs are never downloaded
+/afk game gba                     # fetches the emulator (gbajs) on first use
+```
+
+Battery saves persist to `~/.claude/afk-arcade/saves/` (FireRed's Flash 1M
+included), the emulator paces itself to the GBA's real ~60 fps regardless of
+daemon cadence, and F8 maps your keys to the pad: arrows = D-pad,
+Space = A, F = B, Enter = Start, Esc = Select, 1/2 = L/R.
+Switch back anytime with `/afk game doom`.
+
 On the first `SessionStart` the auto-setup hook:
 - Creates `~/.claude/afk-arcade/config.json` with DOOM-first defaults.
 - Writes `~/.claude/afk-arcade/statusline.sh` (the shim that drives the banner).

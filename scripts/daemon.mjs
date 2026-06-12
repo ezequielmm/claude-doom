@@ -31,8 +31,11 @@ const DOOM_TMP     = path.join(TMP_ROOT, 'doom');
 const PIDFILE      = path.join(DOOM_TMP, 'daemon.pid');
 // On Windows, AF_UNIX bind to a file path fails with EACCES in most setups.
 // Use a Windows named pipe instead — same exclusive-bind singleton semantics.
+// AFK_ARCADE_PIPE_SUFFIX isolates the singleton for tests/drills — without
+// it, an isolated-config test daemon still fights the user's live daemon
+// over the machine-global pipe name and silently yields.
 const SOCKFILE     = process.platform === 'win32'
-  ? '\\\\.\\pipe\\afk-arcade-daemon'
+  ? '\\\\.\\pipe\\afk-arcade-daemon' + (process.env.AFK_ARCADE_PIPE_SUFFIX ?? '')
   : path.join(DOOM_TMP, 'daemon.sock');
 const ERRFILE      = path.join(DOOM_TMP, 'daemon.err');
 const VIEWPORT     = path.join(DOOM_TMP, 'viewport.json');
@@ -233,10 +236,20 @@ async function main() {
     removePidfile();
   });
 
-  // Boot the engine
+  // Boot the engine — DOOM by default; GBA when configured with a
+  // user-supplied ROM (game:'gba' + gbaRom path). Same contract either way.
   let engine;
+  let engineKind = 'doom';
   try {
-    engine = await createDoom();
+    const bootCfg = readConfig();
+    if (bootCfg.game === 'gba' && typeof bootCfg.gbaRom === 'string') {
+      const { createGba, gbaVendorExists } = await import('../lib/gba-engine.mjs');
+      if (!gbaVendorExists()) throw new Error('vendor/gba missing — run fetch-gba');
+      engine = await createGba(bootCfg.gbaRom);
+      engineKind = 'gba';
+    } else {
+      engine = await createDoom();
+    }
   } catch (err) {
     writeFatal(`daemon init failed: ${err.message}`);
     removePidfile();
@@ -430,7 +443,7 @@ async function main() {
         try {
           rawActiveUntil = fs.statSync(RAW_REQUEST).mtimeMs + 35_000;
         } catch { rawActiveUntil = 0; }
-        if (!bot && now < rawActiveUntil) {
+        if (!bot && now < rawActiveUntil && engineKind === 'doom') {
           try { bot = createBot(engine); } catch { /* continue without bot */ }
         } else if (bot && now >= rawActiveUntil && _initCfg.bot !== true) {
           // Compositor gone and config never asked for a bot — back to attract
@@ -441,8 +454,10 @@ async function main() {
         }
       }
 
-      // ── Bot / user-controller update ───────────────────────────────────
-      if (bot) {
+      // ── User-controller arbitration (+ bot when present) ─────────────────
+      // Runs with or without a bot: F8/controller input must reach the
+      // engine for ANY game — the bot is just one possible co-driver.
+      {
         // ── Read control.json at most every CONTROL_READ_INTERVAL_MS ─────
         if (now - lastControlReadAt >= CONTROL_READ_INTERVAL_MS) {
           lastControlReadAt = now;
@@ -455,14 +470,14 @@ async function main() {
         if (newOwner !== currentOwner) {
           if (newOwner === 'user') {
             // bot → user: release everything the bot holds and suspend it
-            try { bot.suspend(); } catch { /* ignore */ }
+            if (bot) { try { bot.suspend(); } catch { /* ignore */ } }
           } else {
             // user → bot: release all user-held keys and resume the bot
             for (const code of userHeldCodes) {
               try { engine.pushKey(0, code); } catch { /* ignore */ }
             }
             userHeldCodes.clear();
-            try { bot.resume(); } catch { /* ignore */ }
+            if (bot) { try { bot.resume(); } catch { /* ignore */ } }
           }
           currentOwner = newOwner;
         }
@@ -502,8 +517,9 @@ async function main() {
               }
             }
           }
-        } else {
+        } else if (bot) {
           // ── Bot owns: flush tap-release queue, then run normal update ──
+          // (no bot — e.g. GBA — means an idle engine until the user drives)
           // Refresh aggressive state at most every SESSION_STATE_INTERVAL_MS
           if (now - lastSessionStateAt >= SESSION_STATE_INTERVAL_MS) {
             lastSessionStateAt = now;
@@ -556,7 +572,7 @@ async function main() {
         }
 
         // Write bot-status.json at ~1s cadence (includes owner field)
-        if (now - lastBotStatusAt >= BOT_STATUS_INTERVAL_MS) {
+        if (bot && now - lastBotStatusAt >= BOT_STATUS_INTERVAL_MS) {
           lastBotStatusAt = now;
           const { rss } = process.memoryUsage();
           const rssMb = Math.round(rss / 1024 / 1024);

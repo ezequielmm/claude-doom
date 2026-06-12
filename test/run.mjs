@@ -20,6 +20,7 @@ import { runBotTests } from './bot.test.mjs';
 import { runControlTests } from './control.test.mjs';
 import { runWrapperTests } from './wrapper.test.mjs';
 import { runScreenTests } from './screen.test.mjs';
+import { runGbaTests } from './gba.test.mjs';
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -400,6 +401,10 @@ await runWrapperTests({ passed: { value: 0 }, failed: { value: 0 } }, { test });
 // ── Phase I: universal compositor (doomscreen) tests ──────────────────────────
 
 await runScreenTests({ passed: { value: 0 }, failed: { value: 0 } }, { test });
+
+// ── Phase J: GBA engine adapter tests ─────────────────────────────────────────
+
+await runGbaTests({ passed: { value: 0 }, failed: { value: 0 } }, { test });
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 

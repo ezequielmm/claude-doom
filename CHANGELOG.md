@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Game Boy Advance mode** — the pipeline is officially game-agnostic:
+  `lib/gba-engine.mjs` adapts gbajs (pure-JS GBA core, vendored with
+  `scripts/fetch-gba.mjs` + tonc homebrew test demos) to the same engine
+  contract as DOOM. Real-time pacing inside `tick()` (the GBA runs at its
+  native ~59.7 fps regardless of daemon cadence), battery saves
+  (SRAM/Flash 1M/EEPROM) persisted to `~/.claude/afk-arcade/saves/` on the
+  emulator's own dirty flag, DOOM wire codes mapped to the pad (arrows →
+  D-pad, USE→A, FIRE→B, ENTER→Start, ESC→Select, 1/2→L/R). `/afk rom
+  <path>` (user-supplied, legally-dumped files only — ROMs are never
+  fetched or bundled) + `/afk game gba`. Daemon arbitration now runs
+  WITHOUT a bot (the GBA has none — F8 control reaches any engine), and
+  `AFK_ARCADE_PIPE_SUFFIX` isolates the singleton for tests/drills.
+
 ## [1.0.0] — 2026-06-12
 
 The launch release. Everything below this entry (the 0.9.0 series on main)
