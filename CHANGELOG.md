@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.0.0] — 2026-06-12
+
+The launch release. Everything below this entry (the 0.9.0 series on main)
+is included; the headline experience:
+
+- **`/arcade`** — from inside any Claude session: a new window opens where
+  the same conversation continues with DOOM compositing fullscreen behind
+  it (~30 fps, any modern Windows console, zero setup, absolute paths).
+- **`/afk screen on`** — plain `claude` boots composited in the same window
+  you type it in (PATH shim + PowerShell profile function + env broadcast).
+- **F8 / Ctrl+]** toggles the keyboard between Claude and the marine;
+  **F9** hides/shows the game live while Claude keeps running.
+- **Cerebellum + cortex bot**: motion-gated reflexes at 30 Hz (no
+  wall-shooting, menu-walking, ego-motion cancelling) with optional
+  Claude-piloted strategy (`/afk brain on` — haiku reads an ASCII tactical
+  grid and issues orders with rolling memory).
+- Windows-first engineering: `conhost --headless` ConPTY, named-pipe
+  singleton, adaptive tick pacing around the 15.6 ms timer clamp,
+  full-speed frame streaming. CI green on every push.
+
+---
+
 ## [0.9.0] — 2026-06-12
 
 ### Added

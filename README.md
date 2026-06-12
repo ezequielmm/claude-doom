@@ -52,9 +52,37 @@ claude plugin marketplace add ezequielmm/claude-doom
 claude plugin install afk-arcade@afk-arcade-marketplace
 
 # 2. Restart Claude Code
+
+# 3. Type /arcade inside any Claude session
 ```
 
-That's it. On the first `SessionStart` the auto-setup hook:
+A new terminal window opens where **your same conversation continues
+(`claude --continue`) with DOOM playing fullscreen behind it** at ~30 fps.
+Zero extra setup — everything resolves by absolute path.
+
+### Keys inside the arcade
+
+| Key | Action |
+|---|---|
+| **F8** (or `Ctrl+]`) | Toggle YOUR keyboard between Claude and the marine (WASD move · F fire · Space use) |
+| **F9** | Hide/show the game — Claude keeps running on a clean console |
+
+When you're not driving, the heuristic bot plays: it starts the game, hunts
+things that *move* (motion-gated targeting — it doesn't shoot walls), opens
+doors, and un-sticks itself.
+
+### Want more?
+
+```
+/afk screen on    # plain `claude` ALWAYS boots with the backdrop (same window)
+/afk screen off   # back to a normal claude (also hides live sessions in ~2s)
+/afk brain on     # Claude pilots the marine: a cheap model (haiku) reads an
+                  # ASCII tactical grid of each frame and issues strategy orders
+/afk banner on    # the classic mini-game in your statusline
+/doom             # Claude plays one frame at a time with vision, narrating
+```
+
+On the first `SessionStart` the auto-setup hook:
 - Creates `~/.claude/afk-arcade/config.json` with DOOM-first defaults.
 - Writes `~/.claude/afk-arcade/statusline.sh` (the shim that drives the banner).
 - Adds `statusLine` to `~/.claude/settings.json` **only if you don't already have one** — a backup is saved as `settings.json.afk-arcade-backup` before any change.
