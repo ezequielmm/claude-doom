@@ -48,6 +48,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   as `KEY_UPARROW`).
 - **`/afk screen`**: prints the doomscreen launch command.
 
+### Added (post-0.9.0 main)
+
+- **`/afk screen on` — plain `claude` boots with the DOOM backdrop**: installs
+  a PATH shim (`~/.claude/afk-arcade/bin/claude.cmd` + sh twin for Git Bash,
+  prepended to the user PATH via the PowerShell environment API — never setx,
+  which truncates at 1024 chars). The shim routes through
+  `doomscreen.mjs --wrap <real-claude>`, which is transparent whenever the
+  backdrop doesn't apply: recursion (the compositor's own child), pipes and
+  scripts (no TTY), `--version/--help/-p/mcp/plugin/doctor/update`, and the
+  `/afk screen off` toggle (config `screen=false`) all exec the real claude
+  untouched with its exit code. Verified live: `claude --version` passes
+  through in ~180ms; plain `claude` composites at 29.2 paint fps with the
+  real Claude Code UI on top.
+
 ### Changed
 
 - **Full-speed compositor pipeline** (3.7 → 32 game fps / 28.6 paint fps):

@@ -35,7 +35,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
-import { TMP_ROOT } from '../lib/state.mjs';
+import { TMP_ROOT, readConfig } from '../lib/state.mjs';
 import { parseFrameRgb, composeGrid, renderDiff } from '../lib/compose.mjs';
 import { decodeKeys } from '../lib/keys.mjs';
 import { mapKeyEventToDoom, buildControlState } from '../lib/control-core.mjs';
@@ -83,12 +83,16 @@ if (process.env.AFK_DOOMSCREEN_DEBUG === '1') {
  *   false → keyboard flows natively (stdin inherited by the pty).
  */
 function spawnPty(cmdArgs, cols, rows) {
+  // The child resolves `claude` through the same PATH shim that may have
+  // launched us — AFK_DOOMSCREEN_INNER makes the shim pass straight through.
+  const childEnv = { ...process.env, AFK_DOOMSCREEN_INNER: '1' };
+
   if (process.platform === 'win32') {
     // cmd.exe /c resolves .cmd/.bat shims (claude installs as claude.cmd)
     const child = spawn('conhost.exe', [
       '--headless', '--width', String(cols), '--height', String(rows), '--',
       'cmd.exe', '/c', ...cmdArgs,
-    ], { stdio: ['pipe', 'pipe', 'pipe'] });
+    ], { stdio: ['pipe', 'pipe', 'pipe'], env: childEnv });
     return { child, routedInput: true };
   }
 
@@ -97,6 +101,7 @@ function spawnPty(cmdArgs, cols, rows) {
     // raises "tcgetattr: not supported on socket" (HANDOFF §4).
     const child = spawn('/usr/bin/script', ['-q', '/dev/null', ...cmdArgs], {
       stdio: ['inherit', 'pipe', 'inherit'],
+      env: childEnv,
     });
     return { child, routedInput: false };
   }
@@ -105,6 +110,7 @@ function spawnPty(cmdArgs, cols, rows) {
   const quoted = cmdArgs.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(' ');
   const child = spawn('script', ['-qfc', quoted, '/dev/null'], {
     stdio: ['inherit', 'pipe', 'inherit'],
+    env: childEnv,
   });
   return { child, routedInput: false };
 }
@@ -291,16 +297,51 @@ async function main() {
     return;
   }
 
+  // ── Shim mode (`--wrap <real>`) ────────────────────────────────────────────
+  // The PATH shim claude.cmd routes EVERY `claude` invocation here, so this
+  // mode must be perfectly transparent whenever the backdrop doesn't apply:
+  // exec the real binary untouched and mirror its exit code.
+  const wrapIdx = argv.indexOf('--wrap');
+  const wrapTarget = wrapIdx !== -1 ? argv[wrapIdx + 1] : null;
+
+  const dashDash = argv.indexOf('--');
+  const userArgs = dashDash !== -1 ? argv.slice(dashDash + 1) : [];
+  const cmdArgs = wrapTarget
+    ? [wrapTarget, ...userArgs]
+    : (userArgs.length > 0
+      ? userArgs
+      : [process.env.AFK_DOOMSCREEN_CMD ?? 'claude']);
+
+  const passthrough = () => {
+    const [target, ...args] = cmdArgs;
+    const r = process.platform === 'win32'
+      ? spawnSync('cmd.exe', ['/c', target, ...args], { stdio: 'inherit' })
+      : spawnSync(target, args, { stdio: 'inherit' });
+    process.exit(r.status ?? 1);
+  };
+
+  if (wrapTarget) {
+    // 1. Recursion guard — the compositor's own child resolves `claude`
+    //    through the same PATH shim.
+    if (process.env.AFK_DOOMSCREEN_INNER === '1') passthrough();
+    // 2. Pipes, scripts, CI: only real interactive consoles get a backdrop.
+    if (!process.stdout.isTTY || !process.stdin.isTTY) passthrough();
+    // 3. User toggle (`/afk screen off`).
+    let cfg = {};
+    try { cfg = readConfig(); } catch { /* no config — default wrapped */ }
+    if (cfg.screen === false || cfg.enabled === false) passthrough();
+    // 4. Quick non-UI invocations skip the compositor entirely.
+    const NONINTERACTIVE = new Set([
+      '--version', '-v', '--help', '-h', '-p', '--print',
+      'doctor', 'update', 'mcp', 'plugin', 'migrate-installer', 'setup-token',
+    ]);
+    if (userArgs.some((a) => NONINTERACTIVE.has(a))) passthrough();
+  }
+
   if (!process.stdout.isTTY || !process.stdin.isTTY) {
     process.stderr.write('doomscreen: needs a real terminal (stdin+stdout TTY)\n');
     process.exit(1);
   }
-
-  // Wrapped command: everything after `--`, else AFK_DOOMSCREEN_CMD, else claude
-  const dashDash = argv.indexOf('--');
-  const cmdArgs = dashDash !== -1 && argv.length > dashDash + 1
-    ? argv.slice(dashDash + 1)
-    : [process.env.AFK_DOOMSCREEN_CMD ?? 'claude'];
 
   // Vendor the virtual terminal on first run
   if (!(await xtermVendorValid())) {

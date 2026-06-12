@@ -282,6 +282,61 @@ export async function runScreenTests(counters, { test: testFn }) {
       assert(Array.isArray(result.ctl.held) && result.ctl.held.includes(0xad),
         `held W must map to KEY_UPARROW 0xad, got ${JSON.stringify(result.ctl?.held)}`);
     });
+    await testFn('wrap shim: piped invocation passes through untouched (no alt-screen)', async () => {
+      const { spawnSync } = await import('node:child_process');
+      const r = spawnSync(process.execPath, [
+        '--no-warnings', path.join(ROOT, 'scripts', 'doomscreen.mjs'),
+        '--wrap', 'cmd.exe', '--', '/c', 'echo WRAP_PASS',
+      ], { encoding: 'utf8', timeout: 30_000 });
+      assert(r.status === 0, `exit must be 0, got ${r.status}; stderr: ${r.stderr?.slice(0, 200)}`);
+      assert(r.stdout.includes('WRAP_PASS'), `real command output must flow, got ${JSON.stringify(r.stdout.slice(0, 120))}`);
+      assert(!r.stdout.includes('\x1b[?1049h'), 'no alt-screen on a pipe — transparent passthrough');
+    });
+
+    await testFn('wrap shim: config screen=false passes through even on a TTY', async () => {
+      const os2 = await import('node:os');
+      const fs2 = await import('node:fs');
+      const cfgDir = fs2.mkdtempSync(path.join(os2.tmpdir(), 'afk-shim-cfg-'));
+      fs2.writeFileSync(path.join(cfgDir, 'config.json'),
+        JSON.stringify({ enabled: true, game: 'doom', screen: false }));
+      try {
+        const result = await new Promise((resolve) => {
+          const outer = spawn('conhost.exe', [
+            '--headless', '--width', '90', '--height', '25', '--',
+            'node', '--no-warnings', path.join(ROOT, 'scripts', 'doomscreen.mjs'),
+            '--wrap', 'cmd.exe', '--', '/c', 'echo SCREEN_OFF_PASS',
+          ], {
+            stdio: ['pipe', 'pipe', 'pipe'],
+            env: { ...process.env, AFK_ARCADE_CONFIG_DIR: cfgDir },
+          });
+          let out = '';
+          outer.stdout.on('data', (d) => { out += d; });
+          const t = setTimeout(() => { outer.kill(); resolve({ out, code: -1 }); }, 20_000);
+          outer.on('exit', (code) => { clearTimeout(t); resolve({ out, code }); });
+        });
+        assert(result.code === 0, `exit must be 0, got ${result.code}`);
+        assert(result.out.includes('SCREEN_OFF_PASS'), 'real output must flow');
+        assert(!result.out.includes('\x1b[?1049h'),
+          'screen=false must NOT composite even on a real console');
+      } finally {
+        try { fs2.rmSync(cfgDir, { recursive: true, force: true }); } catch { /* ignore */ }
+      }
+    });
+
+    await testFn('wrap shim: TTY + screen enabled → composites (alt-screen)', async () => {
+      const result = await new Promise((resolve) => {
+        const outer = spawn('conhost.exe', [
+          '--headless', '--width', '90', '--height', '25', '--',
+          'node', '--no-warnings', path.join(ROOT, 'scripts', 'doomscreen.mjs'),
+          '--wrap', 'cmd.exe', '--',
+        ], { stdio: ['pipe', 'pipe', 'pipe'] });
+        let out = '';
+        outer.stdout.on('data', (d) => { out += d; });
+        setTimeout(() => { outer.kill(); resolve({ out }); }, 9000);
+      });
+      assert(result.out.includes('\x1b[?1049h'),
+        `wrapped TTY session must enter the compositor, got ${JSON.stringify(result.out.slice(0, 120))}`);
+    });
   } else {
     process.stdout.write('SKIP  conhost --headless roundtrip — win32 only\n');
     process.stdout.write('SKIP  doomscreen e2e — win32 only\n');

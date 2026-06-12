@@ -170,8 +170,11 @@ On Windows your keyboard is routed by the compositor itself: press **F8** (or
 `Ctrl+]`) and your keys drive the marine via `control.json` (the bot yields);
 press it again to give the keyboard back to Claude. No `expect`, no Tcl.
 
-Tune with `AFK_DOOMSCREEN_FPS` (5–20, default 15). `/afk screen` prints the
-launch command.
+Tune with `AFK_DOOMSCREEN_FPS` (5–35, default 30). `/afk screen` prints the
+launch command — and on Windows, **`/afk screen on` installs a PATH shim so
+plain `claude` boots with the backdrop automatically** (pipes, scripts,
+`--version`, `mcp`, `plugin` and friends pass through untouched;
+`/afk screen off` disables without uninstalling).
 
 ---
 

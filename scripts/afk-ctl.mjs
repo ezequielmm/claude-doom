@@ -497,18 +497,102 @@ switch (cmd) {
     const screenScript = path.join(ROOT, 'scripts', 'doomscreen.mjs');
     const screenCmd = `${process.execPath} --no-warnings ${screenScript}`;
     const isWin = process.platform === 'win32';
+    const sub = args[1];
+
+    if (sub === 'off') {
+      writeConfig({ screen: false });
+      process.stdout.write(
+        'doomscreen shim disabled — `claude` runs plain again (config screen=false).\n' +
+        'Re-enable with: /afk screen on\n',
+      );
+      break;
+    }
+
+    if (sub === 'on') {
+      if (!isWin) {
+        process.stdout.write(
+          'Automatic shim install is Windows-only for now.\n' +
+          `Add an alias to your shell rc instead:\n\n` +
+          `  alias claude='${screenCmd} --wrap "$(command -v claude)" --'\n`,
+        );
+        break;
+      }
+
+      // 1. Resolve the REAL claude (skip our own shim directory)
+      const binDir = path.join(os.homedir(), '.claude', 'afk-arcade', 'bin');
+      let real = null;
+      try {
+        const out = execFileSync('where.exe', ['claude'], { encoding: 'utf8' });
+        const lines = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        real = lines.find((l) => l.toLowerCase().endsWith('.cmd') &&
+                                 !l.toLowerCase().startsWith(binDir.toLowerCase()))
+            ?? lines.find((l) => !l.toLowerCase().startsWith(binDir.toLowerCase()));
+      } catch { /* not found */ }
+      if (!real) {
+        process.stdout.write('Could not resolve the real `claude` on PATH — is Claude Code installed?\n');
+        break;
+      }
+
+      // 2. Write the shims (cmd for PowerShell/cmd, sh for Git Bash)
+      fs.mkdirSync(binDir, { recursive: true });
+      fs.writeFileSync(path.join(binDir, 'claude.cmd'),
+        '@echo off\r\n' +
+        `"${process.execPath}" --no-warnings "${screenScript}" --wrap "${real}" -- %*\r\n`);
+      fs.writeFileSync(path.join(binDir, 'claude'),
+        '#!/bin/sh\n' +
+        `exec "${process.execPath.replace(/\\/g, '/')}" --no-warnings ` +
+        `"${screenScript.replace(/\\/g, '/')}" --wrap "${real.replace(/\\/g, '/')}" -- "$@"\n`);
+
+      // 3. Prepend the bin dir to the USER Path (PowerShell API — setx
+      //    truncates at 1024 chars and must never be used for Path)
+      let pathNote = 'already on PATH';
+      try {
+        const get = `[Environment]::GetEnvironmentVariable('Path','User')`;
+        const current = execFileSync('powershell.exe',
+          ['-NoProfile', '-Command', get], { encoding: 'utf8' }).trim();
+        const onPath = current.toLowerCase().split(';').some(
+          (p) => p.trim().toLowerCase() === binDir.toLowerCase());
+        if (!onPath) {
+          const set = `[Environment]::SetEnvironmentVariable('Path','${binDir};' + ${get},'User')`;
+          execFileSync('powershell.exe', ['-NoProfile', '-Command', set]);
+          pathNote = 'prepended to user PATH (NEW terminals pick it up)';
+        }
+      } catch (err) {
+        pathNote = `PATH update failed (${err.message.slice(0, 60)}) — add manually: ${binDir}`;
+      }
+
+      writeConfig({ screen: true });
+      process.stdout.write([
+        'doomscreen shim installed — plain `claude` now boots with the DOOM backdrop.',
+        `  shim:  ${path.join(binDir, 'claude.cmd')}`,
+        `  real:  ${real}`,
+        `  PATH:  ${pathNote}`,
+        '',
+        'Transparent passthrough: pipes/scripts, --version/--help/-p/mcp/plugin,',
+        'and `/afk screen off` all run the real claude untouched.',
+        'F8 or Ctrl+] toggles your keyboard between Claude and the marine.',
+        '',
+      ].join('\n'));
+      break;
+    }
+
+    // No subcommand — status + manual launch info
+    const cfgScreen = readConfig().screen;
     process.stdout.write([
       'Universal backdrop — DOOM behind Claude Code in ANY terminal.',
       '',
-      'Run this in a fresh terminal (it launches claude inside):',
+      `Shim state: ${cfgScreen === false ? 'OFF (claude runs plain)' : 'ON when installed (config.screen !== false)'}`,
+      '  /afk screen on   — install PATH shim: plain `claude` gets the backdrop',
+      '  /afk screen off  — disable (shim passes through untouched)',
       '',
+      'Manual launch (no shim needed):',
       `  ${screenCmd}`,
       '',
       isWin
         ? 'Keyboard: F8 or Ctrl+] toggles your keys between Claude and the marine.'
         : 'Keyboard flows natively to claude; use /afk control for game input.',
       'Wrap a different command:  ' + screenCmd + ' -- <command> [args]',
-      'Tune fps with AFK_DOOMSCREEN_FPS (5..35, default 24).',
+      'Tune fps with AFK_DOOMSCREEN_FPS (5..35, default 30).',
       '',
     ].join('\n'));
     break;
