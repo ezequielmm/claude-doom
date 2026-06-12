@@ -628,7 +628,40 @@ switch (cmd) {
         pathNote = `PATH update failed (${err.message.slice(0, 60)}) — add manually: ${binDir}`;
       }
 
-      // 4. Broadcast WM_SETTINGCHANGE so Explorer (and listening apps)
+      // 4. PowerShell profile function — PATH propagation on Windows is a
+      //    minefield (apps cache env; elevated consoles build theirs
+      //    differently), but profiles load in EVERY interactive PowerShell.
+      let profileNote = 'profile function installed';
+      try {
+        const MARK_S = '# >>> afk-arcade claude shim >>>';
+        const MARK_E = '# <<< afk-arcade claude shim <<<';
+        const fnBlock = [
+          MARK_S,
+          'function claude {',
+          `  & "${path.join(binDir, 'claude.cmd')}" @args`,
+          '}',
+          MARK_E,
+        ].join('\r\n');
+        const docs = path.join(os.homedir(), 'Documents');
+        for (const dir of [path.join(docs, 'WindowsPowerShell'), path.join(docs, 'PowerShell')]) {
+          fs.mkdirSync(dir, { recursive: true });
+          const prof = path.join(dir, 'profile.ps1');
+          let cur = '';
+          try { cur = fs.readFileSync(prof, 'utf8'); } catch { /* new profile */ }
+          if (cur.includes(MARK_S)) {
+            cur = cur.replace(
+              new RegExp(`${MARK_S.replace(/[>]/g, '\\>')}[\\s\\S]*?${MARK_E.replace(/[<]/g, '\\<')}`),
+              fnBlock);
+          } else {
+            cur = cur + (cur === '' || cur.endsWith('\n') ? '' : '\r\n') + fnBlock + '\r\n';
+          }
+          fs.writeFileSync(prof, cur);
+        }
+      } catch (err) {
+        profileNote = `profile update failed: ${err.message.slice(0, 60)}`;
+      }
+
+      // 5. Broadcast WM_SETTINGCHANGE so Explorer (and listening apps)
       //    refresh their environment — without this, consoles launched from
       //    the taskbar keep the pre-install PATH until logoff.
       try {
@@ -642,9 +675,10 @@ switch (cmd) {
       writeConfig({ screen: true });
       process.stdout.write([
         'doomscreen shim installed — plain `claude` now boots with the DOOM backdrop.',
-        `  shim:  ${path.join(binDir, 'claude.cmd')}`,
-        `  real:  ${real}`,
-        `  PATH:  ${pathNote}`,
+        `  shim:     ${path.join(binDir, 'claude.cmd')}`,
+        `  real:     ${real}`,
+        `  PATH:     ${pathNote}`,
+        `  profiles: ${profileNote} (WindowsPowerShell + PowerShell)`,
         '',
         'Transparent passthrough: pipes/scripts, --version/--help/-p/mcp/plugin,',
         'and `/afk screen off` all run the real claude untouched.',
