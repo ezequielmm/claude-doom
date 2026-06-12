@@ -312,10 +312,11 @@ async function main() {
     process.exit(0);
   }
 
-  // Inside the doomscreen compositor the game IS the whole screen — banner
-  // rows would float over it as an orphaned blob (their centered game cells
-  // win the composition). Emit the HUD text line only.
-  if (process.env.AFK_DOOMSCREEN_INNER === '1') {
+  // HUD-only mode: inside the doomscreen compositor the game IS the whole
+  // screen — banner rows would float over it as an orphaned blob (their
+  // centered game cells win the composition). Same when the user disables
+  // the banner (`/afk banner off`) but keeps the status HUD.
+  if (process.env.AFK_DOOMSCREEN_INNER === '1' || config.banner === false) {
     const cols0 = parseInt(process.env.COLUMNS, 10) || 80;
     const botStatusPath = path.join(TMP_ROOT, 'doom', 'bot-status.json');
     const bs = (() => {
@@ -326,7 +327,9 @@ async function main() {
     })();
     const hudOnly = buildHudLine({
       state, modelObj: json.model, ctxObj: json.context_window,
-      width: clamp(cols0, 20, 280), extraSuffix: 'doom: fullscreen', botStatus: bs,
+      width: clamp(cols0, 20, 280),
+      extraSuffix: process.env.AFK_DOOMSCREEN_INNER === '1' ? 'doom: fullscreen' : '',
+      botStatus: bs,
     }) + '\n';
     process.stdout.write(hudOnly);
     if (dbgOn) {

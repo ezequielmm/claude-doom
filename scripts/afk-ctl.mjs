@@ -493,6 +493,19 @@ switch (cmd) {
     break;
   }
 
+  case 'banner': {
+    const v = args[1];
+    if (v !== 'on' && v !== 'off') {
+      process.stdout.write('Usage: banner <on|off> — game rows in the statusline (HUD text stays)\n');
+      break;
+    }
+    writeConfig({ banner: v === 'on' });
+    process.stdout.write(v === 'on'
+      ? 'banner ON — game rows back in the statusline.\n'
+      : 'banner OFF — statusline shows the HUD text line only (no floating game block).\n');
+    break;
+  }
+
   case 'arcade': {
     // Launch a NEW terminal window running claude (--continue, same project)
     // inside the doomscreen compositor. Everything by ABSOLUTE path — zero
@@ -808,6 +821,7 @@ switch (cmd) {
       '  play                 — print the command to play DOOM in a fresh terminal',
       '  arcade               — NEW window: this conversation continues (claude',
       '                         --continue) with DOOM fullscreen behind it. Zero setup.',
+      '  banner <on|off>      — game rows in the statusline (off = HUD text only)',
       '  screen [on|off]      — universal backdrop: DOOM behind Claude in ANY terminal',
       '                         (on = plain `claude` boots with it; F8 toggles keyboard)',
       '  brain [on|off|status]— Claude pilots the marine: a cheap model (haiku) reads',

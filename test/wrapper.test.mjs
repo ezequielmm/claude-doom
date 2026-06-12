@@ -326,12 +326,14 @@ export async function runWrapperTests(counters, { test: testFn }) {
 
   // The F8 wrapper drives /usr/bin/expect + /usr/bin/script — unix-only by
   // design (HANDOFF §5: it gets retired once the compositor absorbs input).
-  // On win32 those binaries cannot exist; skip rather than report noise.
-  const WRAPPER_UNSUPPORTED = process.platform === 'win32';
+  // Skip wherever those binaries are absent: win32 AND bare CI runners
+  // (GitHub's ubuntu image ships no expect — CI was red since 0.8.0).
+  const WRAPPER_UNSUPPORTED = process.platform === 'win32' ||
+    !fs.existsSync('/usr/bin/expect') || !fs.existsSync('/usr/bin/script');
 
   if (WRAPPER_UNSUPPORTED) {
     process.stdout.write(
-      'SKIP  doomclaude selftests (3) — expect/script PTY wrapper is unix-only\n',
+      'SKIP  doomclaude selftests (3) — expect/script PTY tooling unavailable\n',
     );
     return;
   }
