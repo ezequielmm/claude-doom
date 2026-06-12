@@ -207,7 +207,18 @@ async function main() {
 
   // The command to run (real claude or whatever the user passed)
   // In normal operation: claude CLI
-  const claudeCmd = 'claude';
+  // AFK_DC_CMD overrides the wrapped command (debug/testing aid).
+  const claudeCmd = process.env.AFK_DC_CMD || 'claude';
+
+  // Capture the REAL terminal tty and export it to the claude subtree: the
+  // statusline prefers it over ancestor discovery, so the backdrop daemon
+  // streams frames straight to the terminal — bypassing the wrapper pty,
+  // which keeps the game live even while drive mode pauses claude's output.
+  try {
+    const ttyOut = spawnSync('tty', [], { stdio: ['inherit', 'pipe', 'ignore'], encoding: 'utf8' });
+    const realTty = (ttyOut.stdout ?? '').trim();
+    if (realTty.startsWith('/dev/')) process.env.AFK_ARCADE_REAL_TTY = realTty;
+  } catch { /* no tty — discovery fallback applies */ }
 
   // Build the Tcl expect script (embedded string — no tmp file needed for correctness
   // but we write to a tmp file for reliability with complex quoting)
@@ -223,6 +234,10 @@ async function main() {
   const tmpTcl = path.join(os.tmpdir(), `doomclaude-${process.pid}.tcl`);
   fs.writeFileSync(tmpTcl, tclScript, 'utf8');
 
+  // Debug aid: AFK_DC_DEBUG=1 prints the generated script path and keeps it.
+  const keepTcl = process.env.AFK_DC_DEBUG === '1';
+  if (keepTcl) process.stderr.write(`doomclaude: generated tcl at ${tmpTcl}\n`);
+
   // Exec expect with the generated Tcl script
   // We use spawnSync so the process table is clean and signals flow correctly
   const expectResult = spawnSync(EXPECT_BIN, [tmpTcl], {
@@ -232,7 +247,9 @@ async function main() {
   });
 
   // Cleanup
-  try { fs.unlinkSync(tmpTcl); } catch { /* ignore */ }
+  if (!keepTcl) {
+    try { fs.unlinkSync(tmpTcl); } catch { /* ignore */ }
+  }
 
   process.exit(expectResult.status ?? 1);
 }
@@ -264,10 +281,16 @@ function buildTclScript({ nodeExe, controlScript, claudeCmd, claudeArgs, toggleS
       .replace(/\$/g, '\\$');
   }
 
-  // Encode toggle sequence as Tcl string — each byte as \xNN
-  const tclTogglePattern = Buffer.from(toggleSeq)
+  // Encode toggle sequence as Tcl string — each byte as \xNN.
+  // NOTE: Buffer#map is TypedArray#map (coerces the callback's return to a
+  // NUMBER), which silently turned the pattern into "00000" — use Array.from.
+  const tclTogglePattern = Array.from(Buffer.from(toggleSeq))
     .map(b => `\\x${b.toString(16).padStart(2, '0')}`)
     .join('');
+
+  // Universal secondary toggle: Ctrl+] (0x1d, GS). Single byte — immune to
+  // terminal F-key sequence variance and macOS fn-key media mappings.
+  const tclToggle2 = '\\x1d';
 
   // Build claude argument list in Tcl list format
   const claudeArgsTcl = claudeArgs.map(a => `"${tclq(a)}"`).join(' ');
@@ -319,11 +342,9 @@ trap {
     }
 } WINCH
 
-# ── Bell helper ───────────────────────────────────────────────────────────────
-
-proc ring_bell {} {
-    send_user "\\a"
-}
+# NOTE: no bell feedback — send_user inside an interact action corrupts the
+# next interact's user relay (empirically bisected). The statusline HUD's
+# "you're driving" flip is the toggle feedback instead.
 
 # ── Send sentinel to bridge (drive-exit signal) ───────────────────────────────
 
@@ -344,34 +365,43 @@ while {1} {
     # (exp_pid does not throw on alive processes; we rely on eof detection instead)
 
     if {$mode eq "chat"} {
-        # ── CHAT mode: user stdin → claude ────────────────────────────────────
+        # ── CHAT mode: user stdin → claude (two-way pump by default) ──────────
+        # TCL LANDMINE (cost a 7-round bisection): inside interact's braced
+        # clause list, # is NOT a comment — every word becomes a pattern or
+        # action and silently scrambles the wiring, killing the default
+        # user→spawn relay. NEVER put comments inside the interact bodies.
         set spawn_id $claude_id
         interact {
-            # Toggle key: enter DRIVE mode
             "${tclTogglePattern}" {
-                ring_bell
                 set mode "drive"
                 return
             }
-            # Claude EOF: exit the loop
+            "${tclToggle2}" {
+                set mode "drive"
+                return
+            }
             eof {
                 set mode "done"
                 return
             }
         }
     } elseif {$mode eq "drive"} {
-        # ── DRIVE mode: user stdin → bridge ───────────────────────────────────
-        # Claude output still flows to terminal (claude_id stdout is connected)
+        # ── DRIVE mode: bare interact, user stdin → bridge ────────────────────
+        # Bare pattern list only (see landmine note above; -i/-input clauses or
+        # expect_background also break the implicit relay). Claude's output is
+        # not pumped while driving — its pty buffer absorbs and drains on
+        # toggle-back; the game never freezes because the daemon streams to the
+        # REAL terminal tty (AFK_ARCADE_REAL_TTY), bypassing the wrapper pty.
         set spawn_id $bridge_id
         interact {
-            # Toggle key: return to CHAT mode
             "${tclTogglePattern}" {
-                ring_bell
-                release_bridge $bridge_id
                 set mode "chat"
                 return
             }
-            # Bridge EOF (crashed?): fall back to chat
+            "${tclToggle2}" {
+                set mode "chat"
+                return
+            }
             eof {
                 set mode "chat"
                 return

@@ -449,10 +449,15 @@ async function main() {
             return true;
           } catch { return false; }
         };
-        if (!tryProbe('/dev/tty')) {
-          if (!(typeof txState.ttyPath === 'string' && txState.ttyPath !== '/dev/tty' && tryProbe(txState.ttyPath))) {
-            const discovered = discoverAncestorTty();
-            if (discovered) tryProbe(discovered);
+        // Wrapper override first: doomclaude exports the REAL terminal tty so
+        // frames bypass the wrapper pty (game stays live during drive mode).
+        const realTty = process.env.AFK_ARCADE_REAL_TTY;
+        if (!(typeof realTty === 'string' && realTty.startsWith('/dev/') && tryProbe(realTty))) {
+          if (!tryProbe('/dev/tty')) {
+            if (!(typeof txState.ttyPath === 'string' && txState.ttyPath !== '/dev/tty' && tryProbe(txState.ttyPath))) {
+              const discovered = discoverAncestorTty();
+              if (discovered) tryProbe(discovered);
+            }
           }
         }
 

@@ -100,6 +100,13 @@ if (STDIN_BRIDGE_MODE) {
   // Single startup line to stderr so the wrapper knows we're alive
   process.stderr.write('control.mjs[bridge]: started — reading from stdin\n');
 
+  // The wrapper spawns us on a PTY (expect's spawn), which defaults to
+  // CANONICAL mode — input would be line-buffered (keystrokes trapped until
+  // a newline) and echoed back onto the user's screen. Raw mode fixes both.
+  if (process.stdin.isTTY && typeof process.stdin.setRawMode === 'function') {
+    try { process.stdin.setRawMode(true); } catch { /* pipe stdin — fine */ }
+  }
+
   const bridgeHeld = new Set();
   const bridgeTaps = [];
   let bridgeTapSeq = 1;
@@ -160,13 +167,16 @@ if (STDIN_BRIDGE_MODE) {
     // Scan for sentinel anywhere in the buffer
     for (let i = 0; i < buf.length - 1; i++) {
       if (buf[i] === 0x00 && buf[i + 1] === 0x01) {
-        // Sentinel received: release immediately
-        clearInterval(bridgeHeartbeat);
+        // Sentinel received: release immediately but STAY ALIVE — the wrapper
+        // owns our lifetime and will route the next drive session to us.
+        // (Exiting here killed the bridge after the first drive toggle, making
+        // every later F8 forward keys to a corpse.)
         bridgeTracker.releaseAll();
         bridgeHeld.clear();
         bridgeTaps.length = 0;
+        bridgeIdle = true;
+        bridgeLastInputMs = 0;
         writeReleaseState_shared();
-        process.exit(0);
         return;
       }
     }
